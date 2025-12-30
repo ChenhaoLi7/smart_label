@@ -19,11 +19,28 @@ router.use('/print-center', printCenterRoutes)
 router.use('/scan', scanRoutes)
 
 // 健康检查
-router.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+router.get('/health', async (req, res) => {
+  let dbStatus = 'UNKNOWN';
+  let dbError = null;
+
+  try {
+    const sequelize = require('../config/database');
+    await sequelize.authenticate();
+    dbStatus = 'CONNECTED';
+  } catch (error) {
+    dbStatus = 'DISCONNECTED';
+    dbError = error.message;
+    console.error('健康检查 - 数据库连接失败:', error.message);
+  }
+
+  res.json({
+    status: dbStatus === 'CONNECTED' ? 'OK' : 'ERROR',
+    database: {
+      status: dbStatus,
+      error: dbError
+    },
     timestamp: new Date().toISOString(),
-    message: '智能仓库管理系统运行正常'
+    message: dbStatus === 'CONNECTED' ? '智能仓库管理系统运行正常' : '智能仓库管理系统连接异常'
   })
 })
 

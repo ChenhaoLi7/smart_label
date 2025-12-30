@@ -17,6 +17,19 @@ module.exports = (sequelize) => {
     password: {
       type: DataTypes.STRING,
       allowNull: false
+    },
+    role: {
+      type: DataTypes.ENUM('admin', 'operator', 'viewer'),
+      defaultValue: 'operator'
+    },
+    status: {
+      type: DataTypes.ENUM('active', 'inactive'),
+      defaultValue: 'active'
+    },
+    avatar: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      comment: '用户头像URL'
     }
   }, {
     tableName: 'users',

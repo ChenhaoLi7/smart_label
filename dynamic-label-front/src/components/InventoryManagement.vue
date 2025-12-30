@@ -1,302 +1,481 @@
 <template>
   <div class="inventory-management">
-    <!-- 顶部标题栏 -->
-    <div class="header">
-      <h1>📦 库存管理系统</h1>
-      <div class="header-actions">
-        <button @click="refreshData" class="btn btn-primary">
-          🔄 刷新数据
-        </button>
-        <button @click="exportData" class="btn btn-success">
-          📊 导出数据
-        </button>
+    <!-- Desktop Layout -->
+    <div v-if="!isMobile" class="desktop-layout">
+      <!-- 顶部标题栏 -->
+      <div class="header glass-panel">
+        <div class="header-left">
+          <h1>Inventory Management</h1>
+          <p class="subtitle">Real-time stock tracking and control</p>
+        </div>
+        <div class="header-actions">
+          <button @click="refreshData" class="btn btn-glass">
+            <span class="icon">🔄</span> Refresh
+          </button>
+          <button @click="exportData" class="btn btn-glass">
+            <span class="icon">📊</span> Export
+          </button>
+        </div>
+      </div>
+
+      <!-- 统计卡片 -->
+      <div class="stats-grid">
+        <div class="stat-card glass-panel">
+          <div class="stat-icon-wrapper blue">
+            <div class="stat-icon">📦</div>
+          </div>
+          <div class="stat-content">
+            <div class="stat-number">{{ stats.totalItems }}</div>
+            <div class="stat-label">Total Items</div>
+          </div>
+        </div>
+        <div class="stat-card glass-panel">
+          <div class="stat-icon-wrapper purple">
+            <div class="stat-icon">📋</div>
+          </div>
+          <div class="stat-content">
+            <div class="stat-number">{{ stats.totalLots }}</div>
+            <div class="stat-label">Total Lots</div>
+          </div>
+        </div>
+        <div class="stat-card glass-panel">
+          <div class="stat-icon-wrapper orange">
+            <div class="stat-icon">📍</div>
+          </div>
+          <div class="stat-content">
+            <div class="stat-number">{{ stats.totalBins }}</div>
+            <div class="stat-label">Storage Bins</div>
+          </div>
+        </div>
+        <div class="stat-card glass-panel">
+          <div class="stat-icon-wrapper red">
+            <div class="stat-icon">⚠️</div>
+          </div>
+          <div class="stat-content">
+            <div class="stat-number">{{ stats.lowStock }}</div>
+            <div class="stat-label">Low Stock</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 数据表格区域 -->
+      <div class="data-section glass-panel">
+        <!-- 标签页切换 -->
+        <div class="tabs">
+          <button 
+            v-for="tab in tabs" 
+            :key="tab.key"
+            @click="activeTab = tab.key"
+            :class="['tab-btn', { active: activeTab === tab.key }]"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+
+        <!-- 库存商品表格 -->
+        <div v-if="activeTab === 'items'" class="table-container">
+          <div class="table-header">
+            <h3>Item Inventory</h3>
+            <div class="table-actions">
+              <div class="search-wrapper">
+                <span class="search-icon">🔍</span>
+                <input 
+                  v-model="searchQuery" 
+                  placeholder="Search items..." 
+                  class="search-input"
+                >
+              </div>
+              <select v-model="sortBy" class="sort-select">
+                <option value="sku">Sort by SKU</option>
+                <option value="name">Sort by Name</option>
+                <option value="totalQty">Sort by Quantity</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Name</th>
+                  <th>Total Qty</th>
+                  <th>Available</th>
+                  <th>Bin Count</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in filteredItems" :key="item.sku">
+                  <td><span class="mono-text">{{ item.sku }}</span></td>
+                  <td>{{ item.name }}</td>
+                  <td>{{ item.totalQty }}</td>
+                  <td>{{ item.availableQty }}</td>
+                  <td>{{ item.binCount }} bins</td>
+                  <td>
+                    <span :class="['status-badge', item.status]">
+                      {{ getStatusText(item.status) }}
+                    </span>
+                  </td>
+                  <td>
+                    <button @click="viewItemDetails(item)" class="btn-icon">
+                      👁️
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 批次库存表格 -->
+        <div v-if="activeTab === 'lots'" class="table-container">
+          <div class="table-header">
+            <h3>Lot Inventory</h3>
+            <div class="table-actions">
+              <div class="search-wrapper">
+                <span class="search-icon">🔍</span>
+                <input 
+                  v-model="searchQuery" 
+                  placeholder="Search lots..." 
+                  class="search-input"
+                >
+              </div>
+              <select v-model="sortBy" class="sort-select">
+                <option value="lot">Sort by Lot #</option>
+                <option value="exp">Sort by Expiry</option>
+                <option value="qty">Sort by Quantity</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Lot Number</th>
+                  <th>SKU</th>
+                  <th>Quantity</th>
+                  <th>Bin</th>
+                  <th>Expiry Date</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="lot in filteredLots" :key="lot.id">
+                  <td><span class="mono-text">{{ lot.lot }}</span></td>
+                  <td><span class="mono-text">{{ lot.sku }}</span></td>
+                  <td>{{ lot.qty }} {{ lot.uom }}</td>
+                  <td>{{ lot.bin }}</td>
+                  <td>
+                    <span :class="getExpiryClass(lot.exp)">
+                      {{ formatDate(lot.exp) }}
+                    </span>
+                  </td>
+                  <td>
+                    <span :class="['status-badge', lot.status]">
+                      {{ getStatusText(lot.status) }}
+                    </span>
+                  </td>
+                  <td>
+                    <button @click="viewLotDetails(lot)" class="btn-icon">
+                      👁️
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 库位信息表格 -->
+        <div v-if="activeTab === 'bins'" class="table-container">
+          <div class="table-header">
+            <h3>Bin Status</h3>
+            <div class="table-actions">
+              <div class="search-wrapper">
+                <span class="search-icon">🔍</span>
+                <input 
+                  v-model="searchQuery" 
+                  placeholder="Search bins..." 
+                  class="search-input"
+                >
+              </div>
+              <select v-model="sortBy" class="sort-select">
+                <option value="bin_code">Sort by Bin Code</option>
+                <option value="zone">Sort by Zone</option>
+                <option value="utilization">Sort by Utilization</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Bin Code</th>
+                  <th>Zone</th>
+                  <th>Capacity</th>
+                  <th>Used</th>
+                  <th>Utilization</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="bin in filteredBins" :key="bin.id">
+                  <td><span class="mono-text">{{ bin.bin_code }}</span></td>
+                  <td>{{ bin.zone }}</td>
+                  <td>{{ bin.capacity }}</td>
+                  <td>{{ bin.used }}</td>
+                  <td>
+                    <div class="utilization-bar">
+                      <div 
+                        :class="['utilization-fill', getUtilizationClass(bin.utilization)]"
+                        :style="{ width: bin.utilization + '%' }"
+                      ></div>
+                    </div>
+                    <span class="utilization-text">{{ bin.utilization }}%</span>
+                  </td>
+                  <td>
+                    <span :class="['status-badge', bin.status]">
+                      {{ getStatusText(bin.status) }}
+                    </span>
+                  </td>
+                  <td>
+                    <button @click="viewBinDetails(bin)" class="btn-icon">
+                      👁️
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 交易记录表格 -->
+        <div v-if="activeTab === 'transactions'" class="table-container">
+          <div class="table-header">
+            <h3>Transactions</h3>
+            <div class="table-actions">
+              <div class="search-wrapper">
+                <span class="search-icon">🔍</span>
+                <input 
+                  v-model="searchQuery" 
+                  placeholder="Search transactions..." 
+                  class="search-input"
+                >
+              </div>
+              <select v-model="sortBy" class="sort-select">
+                <option value="timestamp">Sort by Time</option>
+                <option value="type">Sort by Type</option>
+                <option value="user">Sort by User</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Type</th>
+                  <th>SKU</th>
+                  <th>Quantity</th>
+                  <th>Bin</th>
+                  <th>User</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="txn in filteredTransactions" :key="txn.id">
+                  <td>{{ formatDateTime(txn.timestamp) }}</td>
+                  <td>
+                    <span :class="['type-badge', txn.type]">
+                      {{ getTransactionTypeText(txn.type) }}
+                    </span>
+                  </td>
+                  <td><span class="mono-text">{{ txn.sku }}</span></td>
+                  <td>{{ txn.qty }} {{ txn.uom }}</td>
+                  <td>{{ txn.bin }}</td>
+                  <td>{{ txn.user }}</td>
+                  <td>
+                    <span :class="['status-badge', txn.status]">
+                      {{ getStatusText(txn.status) }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- 统计卡片 -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-icon">📦</div>
-        <div class="stat-content">
-          <div class="stat-number">{{ stats.totalItems }}</div>
-          <div class="stat-label">商品总数</div>
+    <!-- Mobile Layout -->
+    <div v-else class="mobile-layout">
+      <div class="mobile-header glass-panel">
+        <h2>Inventory</h2>
+        <div class="mobile-actions">
+          <button @click="refreshData" class="btn-icon">🔄</button>
         </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-icon">📋</div>
-        <div class="stat-content">
-          <div class="stat-number">{{ stats.totalLots }}</div>
-          <div class="stat-label">批次总数</div>
+
+      <!-- Mobile Stats (Horizontal Scroll) -->
+      <div class="mobile-stats-scroll">
+        <div class="mobile-stat-card glass-panel">
+          <div class="stat-icon">📦</div>
+          <div class="stat-info">
+            <span class="stat-value">{{ stats.totalItems }}</span>
+            <span class="stat-label">Items</span>
+          </div>
+        </div>
+        <div class="mobile-stat-card glass-panel">
+          <div class="stat-icon">📋</div>
+          <div class="stat-info">
+            <span class="stat-value">{{ stats.totalLots }}</span>
+            <span class="stat-label">Lots</span>
+          </div>
+        </div>
+        <div class="mobile-stat-card glass-panel">
+          <div class="stat-icon">⚠️</div>
+          <div class="stat-info">
+            <span class="stat-value">{{ stats.lowStock }}</span>
+            <span class="stat-label">Low Stock</span>
+          </div>
         </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-icon">📍</div>
-        <div class="stat-content">
-          <div class="stat-number">{{ stats.totalBins }}</div>
-          <div class="stat-label">库位总数</div>
+
+      <!-- Mobile Tabs (Segmented Control) -->
+      <div class="mobile-tabs-container">
+        <div class="mobile-tabs">
+          <button 
+            v-for="tab in tabs" 
+            :key="tab.key"
+            @click="activeTab = tab.key"
+            :class="['mobile-tab-btn', { active: activeTab === tab.key }]"
+          >
+            {{ tab.label }}
+          </button>
         </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-icon">⚠️</div>
-        <div class="stat-content">
-          <div class="stat-number">{{ stats.lowStock }}</div>
-          <div class="stat-label">库存不足</div>
+
+      <!-- Mobile Search -->
+      <div class="mobile-search">
+        <div class="search-wrapper glass-panel">
+          <span class="search-icon">🔍</span>
+          <input 
+            v-model="searchQuery" 
+            placeholder="Search..." 
+            class="search-input"
+          >
+        </div>
+      </div>
+
+      <!-- Mobile List View -->
+      <div class="mobile-list">
+        <!-- Items List -->
+        <div v-if="activeTab === 'items'" class="list-container">
+          <div v-for="item in filteredItems" :key="item.sku" class="mobile-card glass-panel" @click="viewItemDetails(item)">
+            <div class="card-header">
+              <span class="card-title">{{ item.name }}</span>
+              <span :class="['status-badge', item.status]">{{ getStatusText(item.status) }}</span>
+            </div>
+            <div class="card-body">
+              <div class="info-row">
+                <span class="label">SKU:</span>
+                <span class="value mono-text">{{ item.sku }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Stock:</span>
+                <span class="value">{{ item.availableQty }} / {{ item.totalQty }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lots List -->
+        <div v-if="activeTab === 'lots'" class="list-container">
+          <div v-for="lot in filteredLots" :key="lot.id" class="mobile-card glass-panel" @click="viewLotDetails(lot)">
+            <div class="card-header">
+              <span class="card-title mono-text">{{ lot.lot }}</span>
+              <span :class="['status-badge', lot.status]">{{ getStatusText(lot.status) }}</span>
+            </div>
+            <div class="card-body">
+              <div class="info-row">
+                <span class="label">SKU:</span>
+                <span class="value mono-text">{{ lot.sku }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Qty:</span>
+                <span class="value">{{ lot.qty }} {{ lot.uom }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Exp:</span>
+                <span class="value" :class="getExpiryClass(lot.exp)">{{ formatDate(lot.exp) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bins List -->
+        <div v-if="activeTab === 'bins'" class="list-container">
+          <div v-for="bin in filteredBins" :key="bin.id" class="mobile-card glass-panel" @click="viewBinDetails(bin)">
+            <div class="card-header">
+              <span class="card-title mono-text">{{ bin.bin_code }}</span>
+              <span class="card-subtitle">{{ bin.zone }}</span>
+            </div>
+            <div class="card-body">
+              <div class="utilization-wrapper">
+                <div class="utilization-bar">
+                  <div 
+                    :class="['utilization-fill', getUtilizationClass(bin.utilization)]"
+                    :style="{ width: bin.utilization + '%' }"
+                  ></div>
+                </div>
+                <span class="utilization-text">{{ bin.utilization }}% Used</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Transactions List -->
+        <div v-if="activeTab === 'transactions'" class="list-container">
+          <div v-for="txn in filteredTransactions" :key="txn.id" class="mobile-card glass-panel">
+            <div class="card-header">
+              <span :class="['type-badge', txn.type]">{{ getTransactionTypeText(txn.type) }}</span>
+              <span class="card-time">{{ formatDateTime(txn.timestamp) }}</span>
+            </div>
+            <div class="card-body">
+              <div class="info-row">
+                <span class="label">SKU:</span>
+                <span class="value mono-text">{{ txn.sku }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Qty:</span>
+                <span class="value">{{ txn.qty }} {{ txn.uom }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">User:</span>
+                <span class="value">{{ txn.user }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- 数据表格区域 -->
-    <div class="data-section">
-      <!-- 标签页切换 -->
-      <div class="tabs">
-        <button 
-          v-for="tab in tabs" 
-          :key="tab.key"
-          @click="activeTab = tab.key"
-          :class="['tab-btn', { active: activeTab === tab.key }]"
-        >
-          {{ tab.label }}
-        </button>
-      </div>
-
-      <!-- 库存商品表格 -->
-      <div v-if="activeTab === 'items'" class="table-container">
-        <div class="table-header">
-          <h3>📦 商品库存表</h3>
-          <div class="table-actions">
-            <input 
-              v-model="searchQuery" 
-              placeholder="搜索商品..." 
-              class="search-input"
-            >
-            <select v-model="sortBy" class="sort-select">
-              <option value="sku">按SKU排序</option>
-              <option value="name">按名称排序</option>
-              <option value="totalQty">按总数量排序</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="table-wrapper">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>SKU</th>
-                <th>商品名称</th>
-                <th>总库存</th>
-                <th>可用库存</th>
-                <th>库位分布</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in filteredItems" :key="item.sku">
-                <td><strong>{{ item.sku }}</strong></td>
-                <td>{{ item.name }}</td>
-                <td>{{ item.totalQty }}</td>
-                <td>{{ item.availableQty }}</td>
-                <td>{{ item.binCount }}个库位</td>
-                <td>
-                  <span :class="['status-badge', item.status]">
-                    {{ getStatusText(item.status) }}
-                  </span>
-                </td>
-                <td>
-                  <button @click="viewItemDetails(item)" class="btn-sm btn-info">
-                    查看详情
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- 批次库存表格 -->
-      <div v-if="activeTab === 'lots'" class="table-container">
-        <div class="table-header">
-          <h3>📋 批次库存表</h3>
-          <div class="table-actions">
-            <input 
-              v-model="searchQuery" 
-              placeholder="搜索批次..." 
-              class="search-input"
-            >
-            <select v-model="sortBy" class="sort-select">
-              <option value="lot">按批次号排序</option>
-              <option value="exp">按过期时间排序</option>
-              <option value="qty">按数量排序</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="table-wrapper">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>批次号</th>
-                <th>SKU</th>
-                <th>数量</th>
-                <th>库位</th>
-                <th>过期时间</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="lot in filteredLots" :key="lot.id">
-                <td><strong>{{ lot.lot }}</strong></td>
-                <td>{{ lot.sku }}</td>
-                <td>{{ lot.qty }} {{ lot.uom }}</td>
-                <td>{{ lot.bin }}</td>
-                <td>
-                  <span :class="getExpiryClass(lot.exp)">
-                    {{ formatDate(lot.exp) }}
-                  </span>
-                </td>
-                <td>
-                  <span :class="['status-badge', lot.status]">
-                    {{ getStatusText(lot.status) }}
-                  </span>
-                </td>
-                <td>
-                  <button @click="viewLotDetails(lot)" class="btn-sm btn-info">
-                    查看详情
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- 库位信息表格 -->
-      <div v-if="activeTab === 'bins'" class="table-container">
-        <div class="table-header">
-          <h3>📍 库位信息表</h3>
-          <div class="table-actions">
-            <input 
-              v-model="searchQuery" 
-              placeholder="搜索库位..." 
-              class="search-input"
-            >
-            <select v-model="sortBy" class="sort-select">
-              <option value="bin_code">按库位编码排序</option>
-              <option value="zone">按区域排序</option>
-              <option value="utilization">按利用率排序</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="table-wrapper">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>库位编码</th>
-                <th>区域</th>
-                <th>容量</th>
-                <th>已用</th>
-                <th>利用率</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="bin in filteredBins" :key="bin.id">
-                <td><strong>{{ bin.bin_code }}</strong></td>
-                <td>{{ bin.zone }}</td>
-                <td>{{ bin.capacity }}</td>
-                <td>{{ bin.used }}</td>
-                <td>
-                  <div class="utilization-bar">
-                    <div 
-                      :class="['utilization-fill', getUtilizationClass(bin.utilization)]"
-                      :style="{ width: bin.utilization + '%' }"
-                    ></div>
-                    <span>{{ bin.utilization }}%</span>
-                  </div>
-                </td>
-                <td>
-                  <span :class="['status-badge', bin.status]">
-                    {{ getStatusText(bin.status) }}
-                  </span>
-                </td>
-                <td>
-                  <button @click="viewBinDetails(bin)" class="btn-sm btn-info">
-                    查看详情
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- 交易记录表格 -->
-      <div v-if="activeTab === 'transactions'" class="table-container">
-        <div class="table-header">
-          <h3>📝 交易记录表</h3>
-          <div class="table-actions">
-            <input 
-              v-model="searchQuery" 
-              placeholder="搜索交易..." 
-              class="search-input"
-            >
-            <select v-model="sortBy" class="sort-select">
-              <option value="timestamp">按时间排序</option>
-              <option value="type">按类型排序</option>
-              <option value="user">按用户排序</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="table-wrapper">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>时间</th>
-                <th>类型</th>
-                <th>SKU</th>
-                <th>数量</th>
-                <th>库位</th>
-                <th>用户</th>
-                <th>状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="txn in filteredTransactions" :key="txn.id">
-                <td>{{ formatDateTime(txn.timestamp) }}</td>
-                <td>
-                  <span :class="['type-badge', txn.type]">
-                    {{ getTransactionTypeText(txn.type) }}
-                  </span>
-                </td>
-                <td>{{ txn.sku }}</td>
-                <td>{{ txn.qty }} {{ txn.uom }}</td>
-                <td>{{ txn.bin }}</td>
-                <td>{{ txn.user }}</td>
-                <td>
-                  <span :class="['status-badge', txn.status]">
-                    {{ getStatusText(txn.status) }}
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- 详情弹窗 -->
+    <!-- 详情弹窗 (Shared) -->
     <div v-if="showDetailsModal" class="modal-overlay" @click="closeDetailsModal">
-      <div class="modal-content" @click.stop>
+      <div class="modal-content glass-panel" @click.stop>
         <div class="modal-header">
           <h3>{{ detailsModalTitle }}</h3>
           <button @click="closeDetailsModal" class="close-btn">&times;</button>
         </div>
         <div class="modal-body">
-          <pre>{{ JSON.stringify(selectedItem, null, 2) }}</pre>
+          <pre class="json-view">{{ JSON.stringify(selectedItem, null, 2) }}</pre>
         </div>
       </div>
     </div>
@@ -304,7 +483,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 // 响应式数据
 const activeTab = ref('items')
@@ -313,6 +492,11 @@ const sortBy = ref('sku')
 const showDetailsModal = ref(false)
 const selectedItem = ref(null)
 const detailsModalTitle = ref('')
+const isMobile = ref(false)
+
+const checkDevice = () => {
+  isMobile.value = window.innerWidth <= 768
+}
 
 // 统计数据
 const stats = ref({
@@ -330,10 +514,10 @@ const transactions = ref([])
 
 // 标签页配置
 const tabs = [
-  { key: 'items', label: '商品库存' },
-  { key: 'lots', label: '批次库存' },
-  { key: 'bins', label: '库位信息' },
-  { key: 'transactions', label: '交易记录' }
+  { key: 'items', label: 'Items' },
+  { key: 'lots', label: 'Lots' },
+  { key: 'bins', label: 'Bins' },
+  { key: 'transactions', label: 'History' }
 ]
 
 // 计算属性
@@ -423,8 +607,14 @@ const filteredTransactions = computed(() => {
 
 // 生命周期
 onMounted(() => {
+  checkDevice()
+  window.addEventListener('resize', checkDevice)
   loadMockData()
   calculateStats()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkDevice)
 })
 
 // 方法
@@ -633,52 +823,117 @@ const formatDateTime = (dateTimeString) => {
 <style scoped>
 .inventory-management {
   padding: 20px;
-  background: #f5f5f5;
+  background: transparent;
   min-height: 100vh;
+  color: var(--text-primary);
 }
 
+/* Glass Panel Utility */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+}
+
+/* Header */
 .header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 30px;
-  background: white;
-  padding: 20px;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  padding: 24px;
 }
 
 .header h1 {
   margin: 0;
-  color: #333;
+  color: var(--text-primary);
   font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.subtitle {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 .header-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
 }
 
+/* Buttons */
+.btn-glass {
+  padding: 10px 20px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-glass:hover {
+  background: var(--glass-border);
+  transform: translateY(-1px);
+}
+
+.btn-icon {
+  background: transparent;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.btn-icon:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Stats Grid */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
   margin-bottom: 30px;
 }
 
 .stat-card {
-  background: white;
-  padding: 20px;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  padding: 24px;
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 20px;
+  transition: transform 0.2s;
 }
 
-.stat-icon {
-  font-size: 40px;
+.stat-card:hover {
+  transform: translateY(-2px);
 }
+
+.stat-icon-wrapper {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+}
+
+.stat-icon-wrapper.blue { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+.stat-icon-wrapper.purple { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
+.stat-icon-wrapper.orange { background: rgba(249, 115, 22, 0.1); color: #f97316; }
+.stat-icon-wrapper.red { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
 
 .stat-content {
   flex: 1;
@@ -686,116 +941,483 @@ const formatDateTime = (dateTimeString) => {
 
 .stat-number {
   font-size: 32px;
-  font-weight: bold;
-  color: #007bff;
-  margin-bottom: 5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+  letter-spacing: -1px;
 }
 
 .stat-label {
-  color: #666;
+  color: var(--text-secondary);
   font-size: 14px;
+  margin-top: 4px;
 }
 
+/* Data Section */
 .data-section {
-  background: white;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  padding: 0;
   overflow: hidden;
 }
 
+/* Tabs */
 .tabs {
   display: flex;
-  background: #f8f9fa;
-  border-bottom: 1px solid #dee2e6;
+  padding: 16px 24px 0;
+  border-bottom: 1px solid var(--glass-border);
+  gap: 24px;
 }
 
 .tab-btn {
-  padding: 15px 25px;
+  padding: 0 0 16px;
   border: none;
   background: none;
   cursor: pointer;
-  font-size: 14px;
-  color: #666;
-  transition: all 0.3s;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+  position: relative;
 }
 
 .tab-btn.active {
-  background: white;
-  color: #007bff;
-  border-bottom: 2px solid #007bff;
+  color: var(--text-primary);
+}
+
+.tab-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--text-primary);
+  border-radius: 2px 2px 0 0;
 }
 
 .tab-btn:hover {
-  background: #e9ecef;
+  color: var(--text-primary);
 }
 
+/* Table Header */
 .table-container {
-  padding: 20px;
+  padding: 24px;
 }
 
 .table-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .table-header h3 {
   margin: 0;
-  color: #333;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .table-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
+}
+
+.search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  font-size: 14px;
+  color: var(--text-secondary);
 }
 
 .search-input {
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  width: 200px;
+  padding: 10px 12px 10px 36px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  width: 240px;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .sort-select {
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: white;
+  padding: 10px 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
 }
 
+/* Data Table */
 .table-wrapper {
   overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
 }
 
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  background: white;
-}
-
-.data-table th,
-.data-table td {
-  padding: 12px;
-  text-align: left;
-  border-bottom: 1px solid #eee;
 }
 
 .data-table th {
-  background: #f8f9fa;
+  padding: 16px;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.02);
   font-weight: 600;
-  color: #333;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--glass-border);
 }
 
-.data-table tbody tr:hover {
-  background: #f8f9fa;
+.data-table td {
+  padding: 16px;
+  border-bottom: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  font-size: 14px;
 }
 
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table tr:hover td {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.mono-text {
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+/* Status Badges */
 .status-badge {
-  padding: 4px 8px;
-  border-radius: 12px;
+  padding: 4px 10px;
+  border-radius: 20px;
   font-size: 12px;
+  font-weight: 600;
+  display: inline-block;
+}
+
+.status-badge.ACTIVE, .status-badge.COMPLETED, .status-badge.MOVE {
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+}
+
+.status-badge.INACTIVE, .status-badge.OUT_OF_STOCK, .status-badge.OUTBOUND, .status-badge.CANCELLED {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+.status-badge.LOW_STOCK, .status-badge.PENDING {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+
+.type-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-primary);
+}
+
+.type-badge.INBOUND { background: rgba(59, 130, 246, 0.15); color: #2563eb; }
+
+/* Utilization Bar */
+.utilization-bar {
+  width: 100px;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.utilization-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.utilization-fill.low { background: #10b981; }
+.utilization-fill.medium { background: #f59e0b; }
+.utilization-fill.high { background: #ef4444; }
+
+.utilization-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Expiry Colors */
+.expiry-warning { color: #ef4444; font-weight: 600; }
+.expiry-notice { color: #f59e0b; font-weight: 600; }
+.expiry-normal { color: #10b981; }
+
+/* Mobile Layout Styles */
+.mobile-layout {
+  padding-bottom: 80px;
+}
+
+.mobile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.mobile-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.mobile-stats-scroll {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 0 20px 20px;
+  scrollbar-width: none;
+}
+
+.mobile-stats-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-stat-card {
+  min-width: 140px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mobile-stat-card .stat-icon {
+  font-size: 24px;
+}
+
+.mobile-stat-card .stat-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-stat-card .stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mobile-stat-card .stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.mobile-tabs-container {
+  padding: 0 20px 20px;
+}
+
+.mobile-tabs {
+  display: flex;
+  background: rgba(118, 118, 128, 0.12);
+  padding: 2px;
+  border-radius: 8px;
+}
+
+.mobile-tab-btn {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  background: none;
+  font-size: 13px;
   font-weight: 500;
+  color: var(--text-primary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mobile-tab-btn.active {
+  background: white;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12);
+}
+
+.mobile-search {
+  padding: 0 20px 20px;
+}
+
+.mobile-search .search-wrapper {
+  padding: 0;
+  border-radius: 10px;
+  background: var(--glass-bg);
+}
+
+.mobile-search .search-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+}
+
+.mobile-list {
+  padding: 0 20px;
+}
+
+.list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mobile-card {
+  padding: 16px;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.mobile-card:active {
+  transform: scale(0.98);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.card-title {
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.card-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.card-time {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+}
+
+.info-row .label {
+  color: var(--text-secondary);
+}
+
+.info-row .value {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.utilization-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.utilization-wrapper .utilization-bar {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.json-view {
+  background: rgba(0, 0, 0, 0.03);
+  padding: 15px;
+  border-radius: 8px;
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 768px) {
+  .inventory-management {
+    padding: 0;
+  }
 }
 
 .status-badge.ACTIVE {

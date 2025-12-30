@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.env.local
+.env.*.local
+config/database.json
+
+# Build and Dist
+dist/
+dist-ssr/
+*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+server.log
+*.log
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+
+# Certs
+certs/
+*.pem
+*.crt
+*.key
+
+# Database backups
+backup.sql
+*.sql
+!server/add_avatar_column.sql
+
+# Desktop files
+.DS_Store
+
+# Artifacts
+/Users/lichenhao/.gemini/antigravity/brain/

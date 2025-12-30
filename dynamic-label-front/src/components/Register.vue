@@ -162,7 +162,7 @@ export default {
       loading.value = true
       
       try {
-        await axios.post('http://localhost:3000/api/auth/register', {
+        await axios.post('/api/auth/register', {
           username: username.value,
           email: email.value,
           password: password.value

@@ -37,15 +37,30 @@ const getInventoryStats = async (req, res) => {
       })
     ])
 
+    // 计算库位利用率
+    const usedBins = await Lot.count({
+      distinct: true,
+      col: 'bin_code',
+      where: { 
+        status: 'ACTIVE',
+        quantity: { [Op.gt]: 0 }
+      }
+    })
+    
+    const utilization = totalBins > 0 ? Math.round((usedBins / totalBins) * 100) : 0
+
     res.json({
       success: true,
       data: {
         totalItems,
         totalLots,
         totalBins,
-        lowStockItems,
-        expiredLots,
-        todayTransactions
+        utilization,
+        lowStockCount: lowStockItems,
+        expiringLotsCount: expiredLots,
+        todayTransactions,
+        usedBins,
+        availableBins: totalBins - usedBins
       }
     })
   } catch (error) {

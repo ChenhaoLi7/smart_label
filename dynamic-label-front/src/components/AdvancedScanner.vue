@@ -2,7 +2,7 @@
   <div class="scanner-container">
     <!-- 扫码模式选择 -->
     <div class="scanner-header">
-      <h2 class="scanner-title">智能扫码系统</h2>
+      <h2 class="scanner-title">Smart Scan System</h2>
       <div class="mode-selector">
         <button 
           v-for="mode in scanModes" 
@@ -35,19 +35,20 @@
             <div class="corner bottom-left"></div>
             <div class="corner bottom-right"></div>
           </div>
-          <p class="scan-hint">将条码放入框内</p>
+          <p class="scan-hint">Please place the barcode inside the frame</p>
         </div>
 
         <!-- 摄像头控制 -->
         <div class="camera-controls">
           <button @click="toggleCamera" class="control-btn">
-            {{ isScanning ? '停止扫描' : '开始扫描' }}
+            {{ isScanning ? 'Stop Scan' : 'Start Scan' }}
           </button>
           <button @click="switchCamera" class="control-btn" v-if="devices.length > 1">
-            切换摄像头
+            Switch Camera
           </button>
-          <button @click="toggleFlash" class="control-btn" v-if="hasFlash">
-            {{ flashOn ? '关闭手电筒' : '打开手电筒' }}
+          <button @click="toggleFlash" class="control-btn flash-btn" :class="{ active: flashOn }" v-if="hasFlash">
+            <span class="flash-icon">{{ flashOn ? '💡' : '🔦' }}</span>
+            {{ flashOn ? 'Light Off' : 'Light On' }}
           </button>
         </div>
       </div>
@@ -63,8 +64,8 @@
             style="display: none"
           />
           <div class="upload-icon">📁</div>
-          <p>点击选择图片或拖拽到此处</p>
-          <p class="upload-hint">支持 JPG、PNG 格式</p>
+          <p>Click to select an image or drag it here</p>
+          <p class="upload-hint">Supports JPG and PNG formats</p>
         </div>
       </div>
 
@@ -73,38 +74,65 @@
         <input 
           v-model="manualCode" 
           type="text" 
-          placeholder="请输入条码内容"
+          placeholder="Please enter the barcode content"
           class="manual-input-field"
           @keyup.enter="handleManualSubmit"
         />
-        <button @click="handleManualSubmit" class="submit-btn">确认</button>
+        <button @click="handleManualSubmit" class="submit-btn">Confirm</button>
       </div>
     </div>
 
     <!-- 扫描结果 -->
     <div v-if="scanResult" class="scan-result">
-      <h3>扫描结果</h3>
+      <h3>Scan Result</h3>
       <div class="result-content">
         <div class="result-item">
-          <span class="label">原始数据：</span>
+          <span class="label">Raw Data:</span>
           <span class="value">{{ scanResult.raw }}</span>
         </div>
         <div v-if="scanResult.parsed" class="result-item">
-          <span class="label">解析结果：</span>
+          <span class="label">Parsed Result:</span>
           <pre class="parsed-json">{{ JSON.stringify(scanResult.parsed, null, 2) }}</pre>
         </div>
         <div class="result-item">
-          <span class="label">扫描时间：</span>
+          <span class="label">Scan Time:</span>
           <span class="value">{{ scanResult.timestamp }}</span>
         </div>
       </div>
       
       <!-- 业务操作按钮 -->
       <div class="business-actions">
-        <button @click="handleInbound" class="action-btn inbound">入库操作</button>
-        <button @click="handleOutbound" class="action-btn outbound">出库操作</button>
-        <button @click="handleInventory" class="action-btn inventory">库存查询</button>
-        <button @click="clearResult" class="action-btn clear">清除结果</button>
+        <button @click="handleInbound" class="action-btn inbound">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Inbound Processing
+        </button>
+        <button @click="handleOutbound" class="action-btn outbound">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          Outbound Processing
+        </button>
+        <button @click="handleInventory" class="action-btn inventory">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="3.27,6.96 12,12.01 20.73,6.96"/>
+            <line x1="12" y1="22.08" x2="12" y2="12"/>
+          </svg>
+          Inventory Inquiry
+        </button>
+        <button @click="clearResult" class="action-btn clear">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+          Clear Result
+        </button>
       </div>
     </div>
 
@@ -112,13 +140,22 @@
     <div v-if="statusMessage" class="status-message" :class="statusType">
       {{ statusMessage }}
     </div>
+    
+    <!-- 低光环境提示 -->
+    <div v-if="isLowLight && !flashOn && hasFlash" class="low-light-hint">
+      <div class="hint-content">
+        <span class="hint-icon">🌙</span>
+        <span>Low light detected. Turning on the light will improve scan accuracy</span>
+        <button @click="toggleFlash" class="hint-btn">Turn On Light</button>
+      </div>
+    </div>
 
     <!-- 设备选择 -->
     <div v-if="devices.length > 1" class="device-selector">
-      <label>选择摄像头：</label>
+      <label>Select Camera:</label>
       <select v-model="selectedDevice" @change="switchDevice">
         <option v-for="device in devices" :key="device.deviceId" :value="device.deviceId">
-          {{ device.label || `摄像头 ${device.deviceId.slice(0, 8)}` }}
+          {{ device.label || `Camera ${device.deviceId.slice(0, 8)}` }}
         </option>
       </select>
     </div>
@@ -143,12 +180,14 @@ const devices = ref([])
 const selectedDevice = ref('')
 const hasFlash = ref(false)
 const flashOn = ref(false)
+const isLowLight = ref(false) // 低光环境检测
+let lightCheckInterval = null
 
 // 扫码模式
 const scanModes = [
-  { value: 'camera', label: '📷 摄像头扫描', icon: '📷' },
-  { value: 'file', label: '📁 图片上传', icon: '📁' },
-  { value: 'manual', label: '⌨️ 手动输入', icon: '⌨️' }
+  { value: 'camera', label: '📷 Camera Scan', icon: '📷' },
+  { value: 'file', label: '📁 Image Upload', icon: '📁' },
+  { value: 'manual', label: '⌨️ Manual Input', icon: '⌨️' }
 ]
 
 // ZXing 扫码器
@@ -172,10 +211,10 @@ onBeforeUnmount(() => {
 const checkPermissions = async () => {
   try {
     await navigator.mediaDevices.getUserMedia({ video: true })
-    statusMessage.value = '摄像头权限已获取'
+    statusMessage.value = 'Camera permission granted'
     statusType.value = 'success'
   } catch (error) {
-    statusMessage.value = '无法访问摄像头，请检查权限设置'
+    statusMessage.value = 'Cannot access camera. Please check permission settings'
     statusType.value = 'error'
   }
 }
@@ -185,11 +224,27 @@ const listDevices = async () => {
   try {
     const allDevices = await navigator.mediaDevices.enumerateDevices()
     devices.value = allDevices.filter(device => device.kind === 'videoinput')
+    
     if (devices.value.length > 0) {
-      selectedDevice.value = devices.value[0].deviceId
+      // 优先选择后置摄像头（通常有闪光灯）
+      const rearCamera = devices.value.find(device => 
+        device.label.toLowerCase().includes('back') || 
+        device.label.toLowerCase().includes('rear') ||
+        device.label.toLowerCase().includes('environment') ||
+        device.label.includes('后') ||
+        device.label.includes('後')
+      )
+      
+      selectedDevice.value = rearCamera ? rearCamera.deviceId : devices.value[0].deviceId
+      
+      console.log('📷 可用摄像头:', devices.value.map(d => ({
+        deviceId: d.deviceId,
+        label: d.label
+      })))
+      console.log('📷 选择的摄像头:', selectedDevice.value)
     }
   } catch (error) {
-    console.error('获取设备列表失败:', error)
+    console.error('デバイス一覧の取得に失敗しました:', error)
   }
 }
 
@@ -212,19 +267,23 @@ const startScanning = async () => {
   
   try {
     isScanning.value = true
-    statusMessage.value = '正在启动摄像头...'
+    statusMessage.value = 'Starting camera...'
     statusType.value = 'info'
     
     // 获取视频流
     const constraints = {
       video: {
         deviceId: selectedDevice.value ? { exact: selectedDevice.value } : undefined,
-        facingMode: 'environment'
+        // 优先使用后置摄像头（通常有闪光灯）
+        facingMode: selectedDevice.value ? undefined : 'environment'
       }
     }
     
     stream = await navigator.mediaDevices.getUserMedia(constraints)
     videoRef.value.srcObject = stream
+    
+    // 检测闪光灯支持
+    await checkFlashSupport()
     
     // 初始化 ZXing
     codeReader = new BrowserMultiFormatReader()
@@ -241,12 +300,15 @@ const startScanning = async () => {
       }
     )
     
-    statusMessage.value = '扫描已开始，请将条码放入框内'
+    statusMessage.value = 'Scan started. Please place the barcode inside the frame'
     statusType.value = 'success'
     
+    // 开始检测环境亮度
+    startLightDetection()
+    
   } catch (error) {
-    console.error('启动扫描失败:', error)
-    statusMessage.value = '启动扫描失败: ' + error.message
+    console.error('スキャン開始に失敗しました:', error)
+    statusMessage.value = 'Failed to start scan: ' + error.message
     statusType.value = 'error'
     isScanning.value = false
   }
@@ -261,7 +323,7 @@ const stopScanning = async () => {
       await codeReader.reset()
       codeReader = null
     } catch (error) {
-      console.error('停止扫描器失败:', error)
+      console.error('スキャナーの停止に失敗しました:', error)
     }
   }
   
@@ -273,13 +335,20 @@ const stopScanning = async () => {
   if (videoRef.value) {
     videoRef.value.srcObject = null
   }
+  
+  // 停止亮度检测
+  stopLightDetection()
 }
 
 // 切换摄像头
 const switchDevice = async () => {
   if (isScanning.value) {
     await stopScanning()
+    // 等待一下确保资源释放
+    await new Promise(resolve => setTimeout(resolve, 300))
     await startScanning()
+    // 切换摄像头后重新检测闪光灯
+    await checkFlashSupport()
   }
 }
 
@@ -292,20 +361,218 @@ const toggleCamera = async () => {
   }
 }
 
+// 检测闪光灯支持
+const checkFlashSupport = async () => {
+  if (!stream) {
+    console.log('⚠️ 没有视频流，无法检测闪光灯')
+    hasFlash.value = false
+    return
+  }
+  
+  try {
+    const track = stream.getVideoTracks()[0]
+    if (!track) {
+      console.log('⚠️ 没有视频轨道，无法检测闪光灯')
+      hasFlash.value = false
+      return
+    }
+    
+    const capabilities = track.getCapabilities()
+    const settings = track.getSettings()
+    
+    console.log('📷 摄像头能力检测:', {
+      deviceId: settings.deviceId,
+      facingMode: settings.facingMode,
+      capabilities: capabilities,
+      settings: settings
+    })
+    
+    // 检查是否支持 torch（手电筒模式）- 最常用
+    if (capabilities.torch !== undefined) {
+      hasFlash.value = true
+      console.log('✅ 检测到闪光灯支持 (torch API)')
+      statusMessage.value = 'Light feature is available'
+      statusType.value = 'success'
+      setTimeout(() => {
+        if (statusMessage.value === 'Light feature is available') {
+          statusMessage.value = ''
+        }
+      }, 2000)
+      return
+    } 
+    
+    // 检查是否支持 fillLightMode（填充光模式）
+    if (capabilities.fillLightMode && Array.isArray(capabilities.fillLightMode) && capabilities.fillLightMode.length > 0) {
+      hasFlash.value = true
+      console.log('✅ 检测到闪光灯支持 (fillLightMode)')
+      return
+    }
+    
+    // 检查是否支持 exposureCompensation（曝光补偿）
+    if (capabilities.exposureCompensation !== undefined) {
+      hasFlash.value = true
+      console.log('✅ 检测到亮度调节支持 (exposureCompensation)')
+      return
+    }
+    
+    // 如果都不支持
+    hasFlash.value = false
+    console.log('⚠️ 当前摄像头不支持闪光灯控制', {
+      facingMode: settings.facingMode,
+      hasTorch: capabilities.torch !== undefined,
+      hasFillLight: capabilities.fillLightMode !== undefined,
+      hasExposure: capabilities.exposureCompensation !== undefined
+    })
+    
+    // 如果是前置摄像头，提示切换到后置
+    if (settings.facingMode === 'user') {
+      console.log('💡 提示：前置摄像头通常没有闪光灯，请切换到后置摄像头')
+    }
+    
+  } catch (error) {
+    console.error('❌ 闪光灯检测失败:', error)
+    hasFlash.value = false
+  }
+}
+
+// 检测环境亮度
+const detectLightLevel = () => {
+  if (!videoRef.value || !isScanning.value) return
+  
+  try {
+    const video = videoRef.value
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    
+    canvas.width = video.videoWidth || 320
+    canvas.height = video.videoHeight || 240
+    
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    
+    // 获取图像数据
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const data = imageData.data
+    
+    // 计算平均亮度（使用灰度值）
+    let totalBrightness = 0
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]
+      const g = data[i + 1]
+      const b = data[i + 2]
+      // 使用标准灰度公式
+      const brightness = (r * 0.299 + g * 0.587 + b * 0.114)
+      totalBrightness += brightness
+    }
+    
+    const avgBrightness = totalBrightness / (data.length / 4)
+    
+    // 如果平均亮度低于阈值（0-255，阈值设为80），认为是低光环境
+    const threshold = 80
+    const wasLowLight = isLowLight.value
+    isLowLight.value = avgBrightness < threshold
+    
+    // 如果检测到低光环境且闪光灯未开启，提示用户
+    if (isLowLight.value && !flashOn.value && hasFlash.value && !wasLowLight) {
+      statusMessage.value = 'Low light detected. It is recommended to turn on the light'
+      statusType.value = 'info'
+      // 3秒后自动清除提示
+      setTimeout(() => {
+        if (statusMessage.value.includes('Low light detected')) {
+          statusMessage.value = ''
+        }
+      }, 3000)
+    }
+    
+  } catch (error) {
+    console.error('亮度检测失败:', error)
+  }
+}
+
+// 开始亮度检测
+const startLightDetection = () => {
+  stopLightDetection() // 先清除之前的检测
+  if (videoRef.value) {
+    // 每2秒检测一次环境亮度
+    lightCheckInterval = setInterval(() => {
+      detectLightLevel()
+    }, 2000)
+  }
+}
+
+// 停止亮度检测
+const stopLightDetection = () => {
+  if (lightCheckInterval) {
+    clearInterval(lightCheckInterval)
+    lightCheckInterval = null
+  }
+  isLowLight.value = false
+}
+
 // 切换手电筒
 const toggleFlash = async () => {
   if (!stream) return
   
   try {
     const track = stream.getVideoTracks()[0]
-    if (track.getCapabilities().torch) {
+    if (!track) {
+      statusMessage.value = 'Camera track not found'
+      statusType.value = 'error'
+      return
+    }
+    
+    const capabilities = track.getCapabilities()
+    
+    // 方法1: 使用 torch API（最常用）
+    if (capabilities.torch !== undefined) {
       flashOn.value = !flashOn.value
       await track.applyConstraints({
         advanced: [{ torch: flashOn.value }]
       })
+      statusMessage.value = flashOn.value ? 'Light turned on' : 'Light turned off'
+      statusType.value = 'success'
+      return
     }
+    
+    // 方法2: 使用 fillLightMode
+    if (capabilities.fillLightMode && capabilities.fillLightMode.length > 0) {
+      flashOn.value = !flashOn.value
+      const lightMode = flashOn.value ? 'flash' : 'off'
+      await track.applyConstraints({
+        advanced: [{ fillLightMode: lightMode }]
+      })
+      statusMessage.value = flashOn.value ? 'Light turned on' : 'Light turned off'
+      statusType.value = 'success'
+      return
+    }
+    
+    // 方法3: 调整曝光补偿（间接提高亮度）
+    if (capabilities.exposureCompensation !== undefined) {
+      flashOn.value = !flashOn.value
+      const compensation = flashOn.value ? 2.0 : 0.0 // 增加曝光补偿
+      await track.applyConstraints({
+        advanced: [{ exposureCompensation: compensation }]
+      })
+      statusMessage.value = flashOn.value ? 'Brightness increased' : 'Brightness restored'
+      statusType.value = 'success'
+      return
+    }
+    
+    // 如果不支持任何方式
+    statusMessage.value = 'This device does not support light control'
+    statusType.value = 'error'
+    
   } catch (error) {
-    console.error('切换手电筒失败:', error)
+    console.error('ライト切り替えに失敗しました:', error)
+    statusMessage.value = 'Failed to toggle light: ' + error.message
+    statusType.value = 'error'
+    
+    // 某些设备可能需要重新获取流
+    if (error.name === 'NotReadableError' || error.name === 'OverconstrainedError') {
+      console.log('尝试重新获取摄像头流...')
+      await stopScanning()
+      await new Promise(resolve => setTimeout(resolve, 500))
+      await startScanning()
+    }
   }
 }
 
@@ -319,7 +586,7 @@ const handleFileUpload = async (event) => {
   if (!file) return
   
   try {
-    statusMessage.value = '正在解析图片...'
+    statusMessage.value = 'Analyzing image...'
     statusType.value = 'info'
     
     // 使用 ZXing 解析图片
@@ -330,8 +597,8 @@ const handleFileUpload = async (event) => {
       handleScanResult(result.getText())
     }
   } catch (error) {
-    console.error('解析图片失败:', error)
-    statusMessage.value = '无法识别图片中的条码'
+    console.error('画像解析に失敗しました:', error)
+    statusMessage.value = 'Cannot recognize barcode in image'
     statusType.value = 'error'
   }
 }
@@ -363,16 +630,20 @@ const handleScanResult = (rawData) => {
     }
     
     // 震动反馈
+    // 震动反馈 (Haptic Feedback) - 主要针对 Android
     if (navigator.vibrate) {
-      navigator.vibrate(100)
+      navigator.vibrate(200)
     }
+
+    // 音效反馈 (Audio Feedback) - 针对 iOS 和所有设备
+    playScanSound()
     
-    statusMessage.value = '扫描成功！'
+    statusMessage.value = 'Scan successful!'
     statusType.value = 'success'
     
   } catch (error) {
-    console.error('处理扫描结果失败:', error)
-    statusMessage.value = '处理扫描结果失败'
+    console.error('スキャン結果の処理に失敗しました:', error)
+    statusMessage.value = 'Failed to process scan result'
     statusType.value = 'error'
   }
 }
@@ -381,24 +652,45 @@ const handleScanResult = (rawData) => {
 const handleInbound = () => {
   if (!scanResult.value) return
   // TODO: 调用入库API
-  console.log('执行入库操作:', scanResult.value)
+  console.log('入庫処理を実行:', scanResult.value)
 }
 
 const handleOutbound = () => {
   if (!scanResult.value) return
   // TODO: 调用出库API
-  console.log('执行出库操作:', scanResult.value)
+  console.log('出庫処理を実行:', scanResult.value)
 }
 
 const handleInventory = () => {
   if (!scanResult.value) return
   // TODO: 调用库存查询API
-  console.log('执行库存查询:', scanResult.value)
+  console.log('在庫照会を実行:', scanResult.value)
 }
 
 const clearResult = () => {
   scanResult.value = null
   statusMessage.value = ''
+}
+
+// 播放扫描音效
+const playScanSound = () => {
+  // 简单的 "叮" 声 (Base64 encoded wav)
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+  const oscillator = audioContext.createOscillator()
+  const gainNode = audioContext.createGain()
+  
+  oscillator.connect(gainNode)
+  gainNode.connect(audioContext.destination)
+  
+  oscillator.type = 'sine'
+  oscillator.frequency.setValueAtTime(1200, audioContext.currentTime)
+  oscillator.frequency.exponentialRampToValueAtTime(600, audioContext.currentTime + 0.1)
+  
+  gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
+  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1)
+  
+  oscillator.start()
+  oscillator.stop(audioContext.currentTime + 0.1)
 }
 </script>
 
@@ -558,6 +850,110 @@ const clearResult = () => {
   background: #1f2937;
 }
 
+.control-btn.flash-btn {
+  position: relative;
+}
+
+.control-btn.flash-btn.active {
+  background: #fbbf24;
+  color: #000000;
+  animation: flash-pulse 2s ease-in-out infinite;
+}
+
+.control-btn.flash-btn.active:hover {
+  background: #f59e0b;
+}
+
+.flash-icon {
+  display: inline-block;
+  margin-right: 5px;
+  font-size: 1.1em;
+}
+
+@keyframes flash-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(251, 191, 36, 0);
+  }
+}
+
+.low-light-hint {
+  margin: 20px 0;
+  padding: 15px 20px;
+  background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hint-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: white;
+  font-weight: 500;
+}
+
+.hint-icon {
+  font-size: 1.5rem;
+  animation: moonPulse 2s ease-in-out infinite;
+}
+
+@keyframes moonPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.hint-content span:not(.hint-icon) {
+  flex: 1;
+  line-height: 1.5;
+}
+
+.hint-btn {
+  padding: 8px 16px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid white;
+  border-radius: 6px;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.hint-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 768px) {
+  .hint-content {
+    flex-direction: column;
+    text-align: center;
+  }
+  
+  .hint-btn {
+    width: 100%;
+  }
+}
+
 .file-upload {
   padding: 40px;
   text-align: center;
@@ -623,17 +1019,21 @@ const clearResult = () => {
 }
 
 .scan-result {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
   padding: 25px;
   margin-bottom: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
 }
 
 .scan-result h3 {
   margin: 0 0 20px 0;
-  color: #000000;
+  color: var(--text-primary);
   font-size: 1.25rem;
+  font-weight: 600;
 }
 
 .result-content {
@@ -645,25 +1045,28 @@ const clearResult = () => {
 }
 
 .result-item .label {
-  font-weight: 600;
-  color: #374151;
+  font-weight: 500;
+  color: var(--text-secondary);
   display: inline-block;
   width: 100px;
 }
 
 .result-item .value {
-  color: #1f2937;
+  color: var(--text-primary);
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
   word-break: break-all;
 }
 
 .parsed-json {
-  background: #f3f4f6;
+  background: rgba(0, 0, 0, 0.03);
   padding: 15px;
-  border-radius: 6px;
-  font-family: monospace;
+  border-radius: 8px;
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
   font-size: 0.9rem;
   overflow-x: auto;
   margin: 10px 0;
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
 }
 
 .business-actions {
@@ -674,59 +1077,58 @@ const clearResult = () => {
 
 .action-btn {
   padding: 12px 24px;
-  border: none;
-  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 500;
   transition: all 0.2s;
-}
-
-.action-btn.inbound {
-  background: #10b981;
-  color: white;
-}
-
-.action-btn.outbound {
-  background: #ef4444;
-  color: white;
-}
-
-.action-btn.inventory {
-  background: #3b82f6;
-  color: white;
-}
-
-.action-btn.clear {
-  background: #6b7280;
-  color: white;
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .action-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: var(--glass-border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
+
+
 
 .status-message {
   padding: 15px;
-  border-radius: 8px;
+  border-radius: 12px;
   margin-bottom: 20px;
   text-align: center;
-  font-weight: 600;
+  font-weight: 500;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid transparent;
 }
 
 .status-message.info {
-  background: #dbeafe;
-  color: #1e40af;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--text-primary);
+  border-color: rgba(59, 130, 246, 0.2);
 }
 
 .status-message.success {
-  background: #d1fae5;
-  color: #065f46;
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--text-primary);
+  border-color: rgba(16, 185, 129, 0.2);
 }
 
 .status-message.error {
-  background: #fee2e2;
-  color: #991b1b;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--text-primary);
+  border-color: rgba(239, 68, 68, 0.2);
 }
 
 .device-selector {

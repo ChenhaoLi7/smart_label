@@ -1,5 +1,10 @@
 <template>
   <div class="label-designer">
+    <!-- 环境光效背景 -->
+    <div class="ambient-light light-1"></div>
+    <div class="ambient-light light-2"></div>
+    <div class="ambient-light light-3"></div>
+    
     <!-- 顶部工具栏 -->
     <div class="toolbar">
       <div class="toolbar-left">
@@ -167,6 +172,16 @@
             <span>Date</span>
             <span class="field-badge">Dynamic</span>
           </div>
+          <div class="component-item dynamic-field" draggable="true" @dragstart="onDragStart($event, 'dynamic-sn')">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="16" rx="2"/>
+              <line x1="7" y1="8" x2="17" y2="8"/>
+              <line x1="7" y1="12" x2="17" y2="12"/>
+              <line x1="7" y1="16" x2="12" y2="16"/>
+            </svg>
+            <span>Serial No.</span>
+            <span class="field-badge">Unique</span>
+          </div>
         </div>
       </div>
 
@@ -287,6 +302,29 @@
             <div class="property-group">
               <label>Background Image:</label>
               <input type="file" @change="handleBackgroundImage" accept="image/*" class="file-input">
+            </div>
+          </div>
+
+          <div class="property-section">
+            <h4>Data Binding</h4>
+            <div class="property-group">
+              <label>Bind Product:</label>
+              <select v-model="boundProduct" @change="updateDynamicFields" class="property-select">
+                <option :value="null">None (Design Mode)</option>
+                <option v-for="item in mockInventory" :key="item.sku" :value="item">
+                  {{ item.name }}
+                </option>
+              </select>
+            </div>
+            <div v-if="boundProduct" class="bound-info">
+              <div class="info-row">
+                <span class="label">SKU:</span>
+                <span class="value">{{ boundProduct.sku }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Price:</span>
+                <span class="value">${{ boundProduct.price }}</span>
+              </div>
             </div>
           </div>
 
@@ -644,6 +682,15 @@ const savedTemplates = ref([
     preview: '/api/templates/warehouse-preview.png'
   }
 ])
+
+// Data Binding
+const boundProduct = ref(null)
+const mockInventory = [
+  { sku: 'PAD-001-XL', name: 'Smart Tablet XL', price: 599.00, description: '12-inch High Performance Tablet' },
+  { sku: 'LAP-002-15', name: 'Pro Laptop 15"', price: 1299.00, description: 'Professional Workstation Laptop' },
+  { sku: 'PHN-003-6', name: 'Smartphone 6"', price: 899.00, description: 'Latest Gen Smartphone' },
+  { sku: 'WCH-004-S', name: 'Smart Watch S', price: 299.00, description: 'Fitness Tracking Smart Watch' }
+]
 
 // 生命周期
 onMounted(async () => {
@@ -1125,24 +1172,39 @@ const updateDynamicField = () => {
   
   const object = fabricCanvas.value.getObjects().find(obj => obj.id === selectedElement.value.id)
   if (object && selectedElement.value.type === 'dynamic-field') {
-    // 定义占位符文本
-    const placeholders = {
-      SKU: 'SKU-XXXXXX',
-      LOT: 'LOT-YYYYYY', 
-      QTY: '100 pcs',
-      BIN: 'A1-03-02',
-      DATE: '2025-09-24'
+    let newText = 'Dynamic Field'
+    
+    if (boundProduct.value) {
+      // 如果绑定了商品，使用商品数据
+      switch (selectedElement.value.fieldType) {
+        case 'SKU': newText = boundProduct.value.sku; break
+        case 'LOT': newText = 'L' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-001'; break
+        case 'QTY': newText = '1 pcs'; break
+        case 'BIN': newText = 'A1-03-02'; break // Mock Bin
+        case 'DATE': newText = new Date().toLocaleDateString(); break
+        case 'SN': newText = 'SN-' + boundProduct.value.sku + '-0001'; break
+        default: newText = boundProduct.value.name
+      }
+    } else {
+      // 否则使用占位符
+      const placeholders = {
+        SKU: 'SKU-XXXXXX',
+        LOT: 'LOT-YYYYYY', 
+        QTY: '100 pcs',
+        BIN: 'A1-03-02',
+        DATE: '2025-09-24',
+        SN: 'SN-000001'
+      }
+      newText = placeholders[selectedElement.value.fieldType] || 'Dynamic Field'
     }
     
-    const newPlaceholderText = placeholders[selectedElement.value.fieldType] || 'Dynamic Field'
-    
     object.set({
-      text: newPlaceholderText,
+      text: newText,
       fieldType: selectedElement.value.fieldType
     })
     
     // 更新选中元素的文本
-    selectedElement.value.text = newPlaceholderText
+    selectedElement.value.text = newText
     
     // 强制重新渲染画布
     fabricCanvas.value.requestRenderAll()
@@ -1150,6 +1212,50 @@ const updateDynamicField = () => {
     // 更新画布对象列表
     updateCanvasObjects()
   }
+}
+
+// 更新所有动态字段（当绑定商品改变时）
+const updateDynamicFields = () => {
+  if (!fabricCanvas.value) return
+  
+  const objects = fabricCanvas.value.getObjects()
+  objects.forEach(obj => {
+    if (obj.type === 'dynamic-field') {
+      let newText = ''
+      if (boundProduct.value) {
+        switch (obj.fieldType) {
+          case 'SKU': newText = boundProduct.value.sku; break
+          case 'LOT': newText = 'L' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-001'; break
+          case 'QTY': newText = '1 pcs'; break
+          case 'BIN': newText = 'A1-03-02'; break
+          case 'DATE': newText = new Date().toLocaleDateString(); break
+          case 'SN': newText = 'SN-' + boundProduct.value.sku + '-0001'; break
+          default: newText = boundProduct.value.name
+        }
+      } else {
+        const placeholders = {
+          SKU: 'SKU-XXXXXX',
+          LOT: 'LOT-YYYYYY', 
+          QTY: '100 pcs',
+          BIN: 'A1-03-02',
+          DATE: '2025-09-24',
+          SN: 'SN-000001'
+        }
+        newText = placeholders[obj.fieldType] || 'Dynamic Field'
+      }
+      obj.set({ text: newText })
+    } else if (obj.type === 'qrcode' && boundProduct.value) {
+      // 自动更新二维码为商品SKU或JSON
+      obj.set({ qrData: boundProduct.value.sku })
+    } else if (obj.type === 'barcode' && boundProduct.value) {
+      // 自动更新条码为商品SKU
+      obj.set({ barcodeData: boundProduct.value.sku })
+    }
+  })
+  
+  // 强制重新渲染画布，确保视觉更新
+  fabricCanvas.value.requestRenderAll()
+  updateCanvasObjects()
 }
 
 // 更新条码
@@ -1431,11 +1537,59 @@ const getElementTypeName = (type) => {
 </script>
 
 <style scoped>
+/* Apple Glass风格 */
 .label-designer {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #f5f5f5;
+  background-color: var(--bg-primary);
+  position: relative;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif;
+  color: var(--text-primary);
+}
+
+/* 环境光效 */
+.ambient-light {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.6;
+  animation: float 10s infinite ease-in-out alternate;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.light-1 {
+  width: 400px;
+  height: 400px;
+  background: var(--light-1);
+  top: -200px;
+  left: -200px;
+  animation-delay: 0s;
+}
+
+.light-2 {
+  width: 500px;
+  height: 500px;
+  background: var(--light-2);
+  bottom: -250px;
+  right: -250px;
+  animation-delay: 2s;
+}
+
+.light-3 {
+  width: 350px;
+  height: 350px;
+  background: var(--light-3);
+  top: 50%;
+  right: -175px;
+  animation-delay: 4s;
+}
+
+@keyframes float {
+  0% { transform: translate(0, 0); }
+  100% { transform: translate(30px, 20px); }
 }
 
 /* 顶部工具栏 */
@@ -1444,9 +1598,13 @@ const getElementTypeName = (type) => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  background: #ffffff;
-  border-bottom: 1px solid #e0e0e0;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--glass-border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  position: relative;
+  z-index: 10;
 }
 
 .toolbar-left, .toolbar-center, .toolbar-right {
@@ -1458,20 +1616,36 @@ const getElementTypeName = (type) => {
 .btn {
   padding: 8px 16px;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 14px;
-  transition: all 0.2s;
+  font-weight: 500;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
 }
 
-.btn-primary { background: #007bff; color: white; }
-.btn-success { background: #28a745; color: white; }
-.btn-info { background: #17a2b8; color: white; }
-.btn-warning { background: #ffc107; color: #212529; }
-.btn-danger { background: #dc3545; color: white; }
-.btn-secondary { background: #6c757d; color: white; }
+.btn-primary { 
+  background: var(--button-bg); 
+  color: var(--button-text); 
+  border: none;
+}
 
-.btn:hover { opacity: 0.8; transform: translateY(-1px); }
+.btn-success, .btn-info, .btn-warning, .btn-danger, .btn-secondary {
+  background: var(--glass-bg);
+  color: var(--text-primary);
+}
+
+.btn:hover { 
+  background: var(--glass-border);
+  transform: translateY(-1px);
+}
+
+.btn-primary:hover {
+  background: var(--button-hover-bg);
+}
+
 .btn-sm { padding: 6px 12px; font-size: 12px; }
 
 .zoom-controls {
@@ -1484,13 +1658,15 @@ const getElementTypeName = (type) => {
   min-width: 50px;
   text-align: center;
   font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .template-select {
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: white;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-bg);
+  color: var(--text-primary);
 }
 
 /* 主内容区域 */
@@ -1504,16 +1680,21 @@ const getElementTypeName = (type) => {
 /* 左侧组件面板 */
 .component-panel {
   width: 280px;
-  background: white;
-  border-right: 1px solid #e0e0e0;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid var(--glass-border);
   padding: 20px;
   overflow-y: auto;
+  position: relative;
+  z-index: 5;
 }
 
 .component-panel h3 {
   margin: 0 0 20px 0;
-  color: #333;
+  color: var(--text-primary);
   font-size: 18px;
+  font-weight: 600;
 }
 
 .component-group {
@@ -1522,9 +1703,9 @@ const getElementTypeName = (type) => {
 
 .component-group h4 {
   margin: 0 0 15px 0;
-  color: #666;
+  color: var(--text-secondary);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .component-item {
@@ -1533,17 +1714,18 @@ const getElementTypeName = (type) => {
   gap: 10px;
   padding: 12px;
   margin-bottom: 8px;
-  background: #f8f9fa;
-  border: 2px solid transparent;
-  border-radius: 8px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
   cursor: grab;
-  transition: all 0.2s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .component-item:hover {
-  background: #e9ecef;
-  border-color: #007bff;
+  background: var(--glass-border);
+  border-color: var(--text-tertiary);
   transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .component-item:active {
@@ -1563,8 +1745,8 @@ const getElementTypeName = (type) => {
   position: absolute;
   top: 4px;
   right: 4px;
-  background: #007AFF;
-  color: white;
+  background: var(--text-tertiary);
+  color: var(--text-primary);
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 8px;
@@ -1577,8 +1759,10 @@ const getElementTypeName = (type) => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  background: #f8f9fa;
-  border-bottom: 1px solid #e0e0e0;
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--glass-border);
 }
 
 .paper-size-selector {
@@ -1590,14 +1774,15 @@ const getElementTypeName = (type) => {
 .paper-size-selector label {
   font-size: 14px;
   font-weight: 500;
-  color: #555;
+  color: var(--text-secondary);
 }
 
 .paper-select {
   padding: 6px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: white;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-bg);
+  color: var(--text-primary);
   font-size: 14px;
 }
 
@@ -1608,8 +1793,8 @@ const getElementTypeName = (type) => {
 }
 
 .btn.active {
-  background: #007AFF;
-  color: white;
+  background: var(--button-bg);
+  color: var(--button-text);
 }
 
 /* 打印纸背景 */
@@ -1657,7 +1842,7 @@ const getElementTypeName = (type) => {
 
 .guide-line {
   position: absolute;
-  background: #007AFF;
+  background: var(--text-tertiary);
   opacity: 0.8;
 }
 
@@ -1680,7 +1865,7 @@ const getElementTypeName = (type) => {
 
 .property-section h4 {
   margin: 0 0 16px 0;
-  color: #333;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1690,10 +1875,11 @@ const getElementTypeName = (type) => {
 .property-select {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
   font-size: 14px;
-  background: white;
+  background: var(--glass-bg);
+  color: var(--text-primary);
 }
 
 .radio-group {
@@ -1757,9 +1943,10 @@ const getElementTypeName = (type) => {
   align-items: center;
   gap: 12px;
   padding: 8px;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
   cursor: pointer;
+  background: var(--glass-bg);
   transition: all 0.2s ease;
 }
 
@@ -1814,8 +2001,9 @@ const getElementTypeName = (type) => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: #f8f9fa;
+  background: transparent;
   position: relative;
+  z-index: 1;
 }
 
 .canvas-wrapper {
@@ -1828,35 +2016,40 @@ const getElementTypeName = (type) => {
 }
 
 #labelCanvas {
-  border: 2px solid #ddd;
-  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
   background: white;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.08);
 }
 
 .canvas-status {
   display: flex;
   justify-content: space-between;
   padding: 10px 20px;
-  background: white;
-  border-top: 1px solid #e0e0e0;
+  background: var(--glass-bg);
+  border-top: 1px solid var(--glass-border);
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 /* 右侧属性面板 */
 .properties-panel {
   width: 300px;
-  background: white;
-  border-left: 1px solid #e0e0e0;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-left: 1px solid var(--glass-border);
   padding: 20px;
   overflow-y: auto;
+  position: relative;
+  z-index: 5;
 }
 
 .properties-panel h3 {
   margin: 0 0 20px 0;
-  color: #333;
+  color: var(--text-primary);
   font-size: 18px;
+  font-weight: 600;
 }
 
 .property-group {
@@ -1866,9 +2059,9 @@ const getElementTypeName = (type) => {
 .property-group label {
   display: block;
   margin-bottom: 8px;
-  color: #555;
   font-size: 14px;
   font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .property-group input,
@@ -1876,17 +2069,19 @@ const getElementTypeName = (type) => {
 .property-group textarea {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
   font-size: 14px;
-  transition: border-color 0.2s;
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  transition: border-color 0.3s;
 }
 
 .property-group input:focus,
 .property-group select:focus,
 .property-group textarea:focus {
   outline: none;
-  border-color: #007bff;
+  border-color: var(--text-tertiary);
 }
 
 .size-inputs {
@@ -1914,8 +2109,8 @@ const getElementTypeName = (type) => {
 .qr-type-badge {
   display: inline-block;
   padding: 4px 8px;
-  background: #007bff;
-  color: white;
+  background: var(--text-tertiary);
+  color: var(--text-primary);
   border-radius: 12px;
   font-size: 12px;
   font-weight: 500;
@@ -1924,7 +2119,7 @@ const getElementTypeName = (type) => {
 
 .qr-type-info {
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 
@@ -2014,14 +2209,46 @@ const getElementTypeName = (type) => {
 
 /* 底部状态栏 */
 .status-bar {
+  padding: 8px 20px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--glass-border);
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding: 10px 20px;
-  background: white;
-  border-top: 1px solid #e0e0e0;
+  color: var(--text-secondary);
   font-size: 12px;
-  color: #666;
+  position: relative;
+  z-index: 10;
+}
+
+.bound-info {
+  margin-top: 15px;
+  padding: 15px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.info-row:last-child {
+  margin-bottom: 0;
+}
+
+.info-row .label {
+  color: var(--text-secondary);
+}
+
+.info-row .value {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
 }
 
 .status-bar span {
