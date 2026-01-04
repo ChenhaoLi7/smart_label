@@ -8,6 +8,7 @@ import InventoryManagement from '../components/InventoryManagement.vue'
 import PrintCenter from '../components/PrintCenter.vue'
 import PurchaseManagement from '../components/PurchaseManagement.vue'
 import SalesManagement from '../components/SalesManagement.vue'
+import AiAssistant from '../components/AiAssistant.vue'
 
 const routes = [
   {
@@ -28,6 +29,11 @@ const routes = [
     path: '/dashboard',
     name: 'WarehouseDashboard',
     component: WarehouseDashboard
+  },
+  {
+    path: '/ai-assistant',
+    name: 'AiAssistant',
+    component: AiAssistant
   },
   {
     path: '/advanced-scan',

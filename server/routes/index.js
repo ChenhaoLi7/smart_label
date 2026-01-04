@@ -9,11 +9,13 @@ const inventoryManagementRoutes = require('./inventoryManagement')
 const printCenterRoutes = require('./printCenter')
 const scanRoutes = require('./scan')
 const purchaseRoutes = require('./purchase')
+const aiAgentRoutes = require('./aiAgent')
 
 // 注册路由
 router.use('/auth', authRoutes)
 router.use('/inventory', inventoryRoutes)
 router.use('/purchase', purchaseRoutes)
+router.use('/ai', aiAgentRoutes)
 router.use('/inventory-management', inventoryManagementRoutes)
 router.use('/print-center', printCenterRoutes)
 router.use('/scan', scanRoutes)

@@ -129,6 +129,18 @@
                   </div>
                   <span class="nav-text">AI Analytics</span>
                 </a>
+
+                <a href="#" @click.prevent="goToAiAssistant" class="nav-item">
+                  <div class="nav-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <circle cx="12" cy="12" r="10"/>
+                      <path d="M12 16v-4"/>
+                      <path d="M12 8h.01"/>
+                      <path d="M12 2a10 10 0 1 0 10 10" stroke-dasharray="2 2"/>
+                    </svg>
+                  </div>
+                  <span class="nav-text">AI Assistant</span>
+                </a>
               </nav>
             </div>
   
@@ -416,6 +428,17 @@
           </svg>
           <span>Stock</span>
         </a>
+        <a href="#" class="nav-tab" @click.prevent="goToAiAssistant">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a10 10 0 1 0 10 10"/>
+            <circle cx="12" cy="12" r="2"/>
+            <path d="M12 8v-2"/>
+            <path d="M12 18v-2"/>
+            <path d="M16 12h2"/>
+            <path d="M6 12h2"/>
+          </svg>
+          <span>AI</span>
+        </a>
       </nav>
     </div>
   </div>
@@ -578,6 +601,10 @@ const goToSalesManagement = () => {
 
 const goToAnalytics = () => {
   router.push('/analytics')
+}
+
+const goToAiAssistant = () => {
+  router.push('/ai-assistant')
 }
 
 // 切换侧边栏
