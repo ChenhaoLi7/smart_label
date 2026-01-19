@@ -164,8 +164,8 @@ const getLotLabelData = async (items) => {
       })
 
       if (lot) {
-        // 生成JWS签名的二维码内容
-        const qrContent = await generateLotJWS(lot.lot_number, lot.sku)
+        // Simple QR code content - just the lot number with prefix
+        const qrContent = `LOT:${lot.lot_number};SKU:${lot.sku}`
 
         lotData.push({
           sku: lot.sku,
@@ -177,7 +177,7 @@ const getLotLabelData = async (items) => {
           qr_content: qrContent
         })
 
-        console.log('Lot label data created:', { lot_number: lot.lot_number, bin: lot.bin?.bin_code })
+        console.log('Lot label data created:', { lot_number: lot.lot_number, bin: lot.bin?.bin_code, qr: qrContent })
       }
     } else if (item.po_line_id) {
       // 根据采购订单行获取数据
@@ -248,8 +248,8 @@ const getItemLabelData = async (items) => {
     if (item.sku) {
       const itemRecord = await Item.findOne({ where: { sku: item.sku } })
       if (itemRecord) {
-        // 生成JWS签名的二维码内容
-        const qrContent = await generateItemJWS(itemRecord.sku)
+        // Simple QR code content
+        const qrContent = `ITEM:${itemRecord.sku};NAME:${itemRecord.name}`
 
         itemData.push({
           sku: itemRecord.sku,
