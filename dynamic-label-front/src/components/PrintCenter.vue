@@ -514,7 +514,81 @@ const loadMockTemplates = () => {
   ]
 }
 
-const loadMockData = () => {
+const loadMockData = async () => {
+  // Load real lots data from API
+  try {
+    const token = localStorage.getItem('token')
+    const response = await axios.get('/api/inventory-management/lots', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    
+    if (response.data.success) {
+      lots.value = response.data.data.lots || []
+    } else {
+      // Fallback to mock data
+      loadMockLotsData()
+    }
+  } catch (error) {
+    console.error('加载批次数据失败:', error)
+    // Fallback to mock data
+    loadMockLotsData()
+  }
+
+  // Load bins data from API
+  try {
+    const token = localStorage.getItem('token')
+    const response = await axios.get('/api/inventory-management/bins', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    
+    if (response.data.success) {
+      bins.value = response.data.data.bins || []
+    } else {
+      loadMockBinsData()
+    }
+  } catch (error) {
+    console.error('加载库位数据失败:', error)
+    loadMockBinsData()
+  }
+
+  // Mock purchase orders (no real API yet)
+  loadMockPOData()
+}
+
+const loadMockLotsData = () => {
+  // 模拟批次数据
+  lots.value = [
+    {
+      id: 1,
+      lot_number: 'L20250820-001',
+      sku: 'PAD-001-XL',
+      qty: 100,
+      uom: 'pcs',
+      bin: { bin_code: 'A1-03-02' },
+      expiry_date: '2026-08-20'
+    }
+  ]
+}
+
+const loadMockBinsData = () => {
+  // 模拟库位数据
+  bins.value = [
+    {
+      id: 1,
+      bin_code: 'A1-03-02',
+      zone: 'A区',
+      capacity: 1000,
+      used: 750,
+      utilization: 75
+    }
+  ]
+}
+
+const loadMockPOData = () => {
   // 模拟采购订单行数据
   poLines.value = [
     {
@@ -534,31 +608,6 @@ const loadMockData = () => {
       qty: 50,
       uom: 'pcs',
       status: 'OPEN'
-    }
-  ]
-
-  // 模拟批次数据
-  lots.value = [
-    {
-      id: 1,
-      lot_number: 'L20250820-001',
-      sku: 'PAD-001-XL',
-      qty: 100,
-      uom: 'pcs',
-      bin: { bin_code: 'A1-03-02' },
-      expiry_date: '2026-08-20'
-    }
-  ]
-
-  // 模拟库位数据
-  bins.value = [
-    {
-      id: 1,
-      bin_code: 'A1-03-02',
-      zone: 'A区',
-      capacity: 1000,
-      used: 750,
-      utilization: 75
     }
   ]
 }
