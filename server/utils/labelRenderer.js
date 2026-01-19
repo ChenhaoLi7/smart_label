@@ -23,8 +23,8 @@ const generateLotLabelPDF = async (labelData, outputPath) => {
 
                 const label = labelData[i]
 
-                // 标题
-                doc.fontSize(10).font('Helvetica-Bold').text('批次标签', { align: 'center' })
+                // Title
+                doc.fontSize(10).font('Helvetica-Bold').text('LOT LABEL', { align: 'center' })
                 doc.moveDown(0.3)
 
                 // SKU
@@ -32,34 +32,34 @@ const generateLotLabelPDF = async (labelData, outputPath) => {
                 doc.font('Helvetica').text(' ' + label.sku)
                 doc.moveDown(0.2)
 
-                // 批次号
-                doc.fontSize(8).font('Helvetica-Bold').text('批次:', { continued: true })
+                // Lot Number
+                doc.fontSize(8).font('Helvetica-Bold').text('Lot:', { continued: true })
                 doc.font('Helvetica').text(' ' + label.lot)
                 doc.moveDown(0.2)
 
-                // 数量
-                doc.fontSize(8).font('Helvetica-Bold').text('数量:', { continued: true })
+                // Quantity
+                doc.fontSize(8).font('Helvetica-Bold').text('Qty:', { continued: true })
                 doc.font('Helvetica').text(` ${label.qty} ${label.uom}`)
                 doc.moveDown(0.2)
 
-                // 库位
-                doc.fontSize(8).font('Helvetica-Bold').text('库位:', { continued: true })
+                // Bin Location
+                doc.fontSize(8).font('Helvetica-Bold').text('Bin:', { continued: true })
                 doc.font('Helvetica').text(' ' + label.bin)
                 doc.moveDown(0.2)
 
-                // 过期时间
-                doc.fontSize(8).font('Helvetica-Bold').text('过期:', { continued: true })
+                // Expiry Date
+                doc.fontSize(8).font('Helvetica-Bold').text('Exp:', { continued: true })
                 doc.font('Helvetica').text(' ' + label.exp)
                 doc.moveDown(0.5)
 
-                // 生成二维码
+                // Generate QR Code
                 const qrCodeDataUrl = await QRCode.toDataURL(label.qr_content, {
                     errorCorrectionLevel: 'M',
                     type: 'image/png',
                     width: 200
                 })
 
-                // 添加二维码到 PDF (居中)
+                // Add QR Code to PDF (centered)
                 const qrSize = 60
                 const qrX = (doc.page.width - qrSize) / 2
                 doc.image(qrCodeDataUrl, qrX, doc.y, { width: qrSize, height: qrSize })
@@ -97,23 +97,23 @@ const generateBinLabelPDF = async (labelData, outputPath) => {
 
                 const label = labelData[i]
 
-                // 左侧文字信息
+                // Left side text information
                 const textX = 10
-                doc.fontSize(12).font('Helvetica-Bold').text('库位标签', textX, 10)
+                doc.fontSize(12).font('Helvetica-Bold').text('BIN LABEL', textX, 10)
                 doc.moveDown(0.3)
 
-                doc.fontSize(10).font('Helvetica-Bold').text('库位:', textX, doc.y, { continued: true })
+                doc.fontSize(10).font('Helvetica-Bold').text('Bin:', textX, doc.y, { continued: true })
                 doc.font('Helvetica').text(' ' + label.bin_code)
                 doc.moveDown(0.2)
 
-                doc.fontSize(10).font('Helvetica-Bold').text('区域:', textX, doc.y, { continued: true })
+                doc.fontSize(10).font('Helvetica-Bold').text('Zone:', textX, doc.y, { continued: true })
                 doc.font('Helvetica').text(' ' + label.zone)
                 doc.moveDown(0.2)
 
-                doc.fontSize(10).font('Helvetica-Bold').text('容量:', textX, doc.y, { continued: true })
+                doc.fontSize(10).font('Helvetica-Bold').text('Capacity:', textX, doc.y, { continued: true })
                 doc.font('Helvetica').text(' ' + label.capacity)
 
-                // 右侧二维码
+                // Right side QR code
                 const qrCodeDataUrl = await QRCode.toDataURL(label.qr_content, {
                     errorCorrectionLevel: 'M',
                     type: 'image/png',
@@ -157,22 +157,22 @@ const generateItemLabelPDF = async (labelData, outputPath) => {
 
                 const label = labelData[i]
 
-                doc.fontSize(10).font('Helvetica-Bold').text('物料标签', { align: 'center' })
+                doc.fontSize(10).font('Helvetica-Bold').text('ITEM LABEL', { align: 'center' })
                 doc.moveDown(0.3)
 
                 doc.fontSize(8).font('Helvetica-Bold').text('SKU:', { continued: true })
                 doc.font('Helvetica').text(' ' + label.sku)
                 doc.moveDown(0.2)
 
-                doc.fontSize(8).font('Helvetica-Bold').text('名称:', { continued: true })
+                doc.fontSize(8).font('Helvetica-Bold').text('Name:', { continued: true })
                 doc.font('Helvetica').text(' ' + label.name)
                 doc.moveDown(0.2)
 
-                doc.fontSize(8).font('Helvetica-Bold').text('规格:', { continued: true })
+                doc.fontSize(8).font('Helvetica-Bold').text('Spec:', { continued: true })
                 doc.font('Helvetica').text(' ' + label.spec)
                 doc.moveDown(0.5)
 
-                // 二维码
+                // QR Code
                 const qrCodeDataUrl = await QRCode.toDataURL(label.qr_content, {
                     errorCorrectionLevel: 'M',
                     type: 'image/png',
