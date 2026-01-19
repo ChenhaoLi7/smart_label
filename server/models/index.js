@@ -26,9 +26,9 @@ const WorkOrderOutput = require('./WorkOrderOutput')
 Item.hasMany(Lot, { foreignKey: 'sku', sourceKey: 'sku', as: 'lots' })
 Lot.belongsTo(Item, { foreignKey: 'sku', targetKey: 'sku', as: 'item' })
 
-// 库位相关
-Bin.hasMany(Lot, { foreignKey: 'bin_code', sourceKey: 'bin_code', as: 'lots' })
-Lot.belongsTo(Bin, { foreignKey: 'bin_code', targetKey: 'bin_code', as: 'bin' })
+// 批次 - 库位 (使用 bin_id 主键关联)
+Lot.belongsTo(Bin, { foreignKey: 'bin_id', targetKey: 'id', as: 'bin' })
+Bin.hasMany(Lot, { foreignKey: 'bin_id', sourceKey: 'id', as: 'lots' })
 
 // 采购订单相关
 PurchaseOrder.hasMany(PurchaseOrderLine, { foreignKey: 'po_id', as: 'lines' })

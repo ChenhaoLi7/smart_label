@@ -171,11 +171,13 @@ const getLotLabelData = async (items) => {
           sku: lot.sku,
           lot: lot.lot_number,
           qty: lot.qty,
-          uom: lot.uom,
+          uom: lot.uom || 'pcs',
           bin: lot.bin?.bin_code || 'N/A',
           exp: lot.expiry_date ? new Date(lot.expiry_date).toLocaleDateString('zh-CN') : 'N/A',
           qr_content: qrContent
         })
+
+        console.log('Lot label data created:', { lot_number: lot.lot_number, bin: lot.bin?.bin_code })
       }
     } else if (item.po_line_id) {
       // 根据采购订单行获取数据
