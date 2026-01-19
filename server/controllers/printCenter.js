@@ -1,8 +1,8 @@
 const { Item, Bin, Lot, PurchaseOrder, PurchaseOrderLine, SalesOrder, SalesOrderLine, PrintJob } = require('../models')
-const { 
-  generateLotJWS, 
-  generateBinJWS, 
-  generateItemJWS 
+const {
+  generateLotJWS,
+  generateBinJWS,
+  generateItemJWS
 } = require('../utils/jwsSigner')
 
 // 获取可用的打印模板
@@ -53,7 +53,7 @@ const getTemplates = async (req, res) => {
 const printLabels = async (req, res) => {
   try {
     const { templateId, printType, items, options = {} } = req.body
-    
+
     if (!templateId || !printType || !items || !Array.isArray(items)) {
       return res.status(400).json({
         success: false,
@@ -77,7 +77,7 @@ const printLabels = async (req, res) => {
 
     // 根据打印类型获取数据
     let labelData = []
-    
+
     switch (printType) {
       case 'LOT':
         labelData = await getLotLabelData(items)
@@ -92,12 +92,33 @@ const printLabels = async (req, res) => {
         throw new Error(`不支持的打印类型: ${printType}`)
     }
 
-    // 生成标签内容（这里简化处理，实际应该调用PDF生成库）
+    // 生成标签内容
     const labels = labelData.map(item => ({
       ...item,
       template: templateId,
       qr_content: item.qr_content || 'QR_CODE_PLACEHOLDER'
     }))
+
+    // 生成 PDF 文件
+    const fs = require('fs')
+    const path = require('path')
+    const { generateLabelPDF } = require('../utils/labelRenderer')
+
+    // 确保下载目录存在
+    const downloadsDir = path.join(__dirname, '../public/downloads')
+    if (!fs.existsSync(downloadsDir)) {
+      fs.mkdirSync(downloadsDir, { recursive: true })
+    }
+
+    const pdfPath = path.join(downloadsDir, `${jobNumber}.pdf`)
+
+    try {
+      await generateLabelPDF(printType, labels, pdfPath)
+    } catch (pdfError) {
+      console.error('生成 PDF 失败:', pdfError)
+      await printJob.update({ status: 'FAILED', error_message: pdfError.message })
+      throw pdfError
+    }
 
     // 更新打印任务状态
     await printJob.update({
@@ -131,7 +152,7 @@ const printLabels = async (req, res) => {
 // 获取批次标签数据
 const getLotLabelData = async (items) => {
   const lotData = []
-  
+
   for (const item of items) {
     if (item.lot_id) {
       // 根据批次ID获取数据
@@ -141,11 +162,11 @@ const getLotLabelData = async (items) => {
           { model: Bin, as: 'bin' }
         ]
       })
-      
+
       if (lot) {
         // 生成JWS签名的二维码内容
         const qrContent = await generateLotJWS(lot.lot_number, lot.sku)
-        
+
         lotData.push({
           sku: lot.sku,
           lot: lot.lot_number,
@@ -161,12 +182,12 @@ const getLotLabelData = async (items) => {
       const poLine = await PurchaseOrderLine.findByPk(item.po_line_id, {
         include: [{ model: PurchaseOrder, as: 'po' }]
       })
-      
+
       if (poLine) {
         // 生成临时批次号
         const tempLotNumber = `L${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
         const qrContent = await generateLotJWS(tempLotNumber, poLine.sku)
-        
+
         lotData.push({
           sku: poLine.sku,
           lot: tempLotNumber,
@@ -179,21 +200,21 @@ const getLotLabelData = async (items) => {
       }
     }
   }
-  
+
   return lotData
 }
 
 // 获取库位标签数据
 const getBinLabelData = async (items) => {
   const binData = []
-  
+
   for (const item of items) {
     if (item.bin_id) {
       const bin = await Bin.findByPk(item.bin_id)
       if (bin) {
         // 生成JWS签名的二维码内容
         const qrContent = await generateBinJWS(bin.bin_code, bin.zone)
-        
+
         binData.push({
           bin_code: bin.bin_code,
           zone: bin.zone,
@@ -204,7 +225,7 @@ const getBinLabelData = async (items) => {
     } else if (item.bin_code) {
       // 生成JWS签名的二维码内容
       const qrContent = await generateBinJWS(item.bin_code, item.zone || '待设置')
-      
+
       binData.push({
         bin_code: item.bin_code,
         zone: item.zone || '待设置',
@@ -213,21 +234,21 @@ const getBinLabelData = async (items) => {
       })
     }
   }
-  
+
   return binData
 }
 
 // 获取物料标签数据
 const getItemLabelData = async (items) => {
   const itemData = []
-  
+
   for (const item of items) {
     if (item.sku) {
       const itemRecord = await Item.findOne({ where: { sku: item.sku } })
       if (itemRecord) {
         // 生成JWS签名的二维码内容
         const qrContent = await generateItemJWS(itemRecord.sku)
-        
+
         itemData.push({
           sku: itemRecord.sku,
           name: itemRecord.name,
@@ -238,7 +259,7 @@ const getItemLabelData = async (items) => {
       }
     }
   }
-  
+
   return itemData
 }
 
@@ -246,7 +267,7 @@ const getItemLabelData = async (items) => {
 const getPrintJobs = async (req, res) => {
   try {
     const { page = 1, limit = 20, status } = req.query
-    
+
     const whereClause = {}
     if (status) {
       whereClause.status = status

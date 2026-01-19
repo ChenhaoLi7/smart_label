@@ -19,13 +19,16 @@ app.use(express.urlencoded({ extended: true }));
 // 静态文件服务 - 提供上传的头像文件
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// 静态文件服务 - 提供PDF下载
+app.use('/downloads', express.static(path.join(__dirname, 'public/downloads')));
+
 // 路由
 app.use('/api', require('./routes'));
 
 // 错误处理中间件
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ 
+  res.status(500).json({
     message: '服务器内部错误',
     error: process.env.NODE_ENV === 'development' ? err.message : {}
   });
@@ -41,7 +44,7 @@ const startServer = async () => {
   try {
     // 同步数据库
     await syncDatabase();
-    
+
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 服务器启动成功！`);
       console.log(`📍 端口: ${PORT}`);

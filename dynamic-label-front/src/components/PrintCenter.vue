@@ -679,8 +679,9 @@ const previewLabels = async () => {
     })
 
     if (response.data.success) {
-      alert(`预览成功！共生成 ${response.data.data.total_count} 个标签`)
-      console.log('标签数据:', response.data.data.labels)
+      const downloadUrl = `http://127.0.0.1:3000${response.data.data.download_url}`
+      window.open(downloadUrl, '_blank')
+      alert(`预览成功！共生成 ${response.data.data.total_count} 个标签\n\nPDF将在新窗口打开`)
     }
   } catch (error) {
     console.error('预览标签失败:', error)
@@ -708,7 +709,14 @@ const printLabels = async () => {
     })
 
     if (response.data.success) {
-      alert(`打印成功！任务号: ${response.data.data.job_number}`)
+      const downloadUrl = `http://127.0.0.1:3000${response.data.data.download_url}`
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = `${response.data.data.job_number}.pdf`
+      link.click()
+      
+      alert(`打印任务完成！\n任务号: ${response.data.data.job_number}\n\nPDF已自动下载`)
+      
       // 清空选择
       selectedPOItems.value = []
       selectedLotItems.value = []
