@@ -5,7 +5,7 @@
       <div class="nav-content">
         <div class="nav-left">
           <div class="logo">
-            <div class="logo-icon">📦</div>
+            <img src="/icon-192.png" alt="Smart Label Logo" class="logo-img">
             <span class="logo-text">Smart Warehouse</span>
           </div>
         </div>
@@ -119,6 +119,17 @@
                   </div>
                   <span class="nav-text">Sales</span>
                 </a>
+
+                <a href="#" @click.prevent="goToProductionManagement" class="nav-item">
+                  <div class="nav-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                      <path d="M12 8v8"/>
+                      <path d="M8 12h8"/>
+                    </svg>
+                  </div>
+                  <span class="nav-text">Production</span>
+                </a>
   
                 <a href="#" @click.prevent="goToAnalytics" class="nav-item">
                   <div class="nav-icon">
@@ -186,7 +197,7 @@
           <!-- Welcome Section -->
           <div class="welcome-section">
             <div class="welcome-header">
-              <h1 class="page-title">Warehouse Management Center</h1>
+              <h1 class="page-title">Smart Warehouse Management Center</h1>
             </div>
             <div class="welcome-actions">
               <button class="action-btn primary" @click="goToLabelDesign">
@@ -595,8 +606,11 @@ const goToPurchaseManagement = () => {
 }
 
 const goToSalesManagement = () => {
-  // 暂时跳转到打印中心，后续实现销售管理页面
-  router.push('/print-center')
+  router.push('/sales-management')
+}
+
+const goToProductionManagement = () => {
+  router.push('/production-management')
 }
 
 const goToAnalytics = () => {
@@ -687,10 +701,10 @@ const logout = () => {
 /* 顶部导航栏 */
 .nav-header {
   height: 64px;
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid var(--glass-border);
   position: relative;
   z-index: 100;
   flex-shrink: 0;
@@ -712,14 +726,17 @@ const logout = () => {
   gap: 12px;
 }
 
-.logo-icon {
-  font-size: 24px;
+.logo-img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: contain;
 }
 
 .logo-text {
   font-size: 20px;
   font-weight: 600;
-  color: #1d1d1f;
+  color: var(--text-primary);
 }
 
 .user-menu {
@@ -732,8 +749,8 @@ const logout = () => {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #000000;
-  color: white;
+  background: var(--button-bg);
+  color: var(--button-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -744,13 +761,13 @@ const logout = () => {
 .username {
   font-size: 15px;
   font-weight: 500;
-  color: #1d1d1f;
+  color: var(--text-primary);
 }
 
 .logout-btn {
   background: none;
   border: none;
-  color: #000000;
+  color: var(--text-primary);
   cursor: pointer;
   padding: 8px;
   border-radius: 8px;
@@ -774,9 +791,9 @@ const logout = () => {
 /* 左侧导航栏 */
 .sidebar {
   width: 280px;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
-  border-right: 1px solid rgba(0, 0, 0, 0.05);
+  border-right: 1px solid var(--glass-border);
   flex-shrink: 0;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
@@ -811,9 +828,9 @@ const logout = () => {
   left: 0;
   width: 100%;
   height: 48px;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--glass-bg);
   border: none;
-  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  border-top: 1px solid var(--glass-border);
   display: flex;
   align-items: center;
   justify-content: flex-end; /* 展开时靠右 */
@@ -868,20 +885,20 @@ const logout = () => {
   padding: 10px 12px;
   border-radius: 8px;
   text-decoration: none;
-  color: #1d1d1f;
+  color: var(--text-secondary);
   font-size: 15px;
   font-weight: 500;
   transition: all 0.2s ease;
 }
 
 .nav-item:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: #000000;
+  background: var(--input-bg);
+  color: var(--text-primary);
 }
 
 .nav-item.active {
-  background: #000000;
-  color: white;
+  background: var(--button-bg);
+  color: var(--button-text);
 }
 
 .nav-item.active .nav-icon {
@@ -894,7 +911,7 @@ const logout = () => {
 }
 
 .nav-item:hover .nav-icon {
-  color: #000000;
+  color: var(--text-primary);
 }
 
 .nav-text {
@@ -929,22 +946,22 @@ const logout = () => {
 }
 
 .quick-btn.primary {
-  background: #000000;
-  color: white;
+  background: var(--button-bg);
+  color: var(--button-text);
 }
 
 .quick-btn.primary:hover {
-  background: #1f2937;
+  background: var(--button-hover-bg);
   transform: translateY(-1px);
 }
 
 .quick-btn.secondary {
-  background: rgba(0, 0, 0, 0.05);
-  color: #000000;
+  background: var(--input-bg);
+  color: var(--text-primary);
 }
 
 .quick-btn.secondary:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--input-focus-bg);
   transform: translateY(-1px);
 }
 
@@ -953,7 +970,7 @@ const logout = () => {
   flex: 1;
   padding: 40px 48px;
   overflow-y: auto;
-  background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+  background: var(--bg-primary);
   position: relative;
 }
 
@@ -963,11 +980,11 @@ const logout = () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 48px;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   border-radius: 16px;
   padding: 32px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--glass-border);
 }
 
 .welcome-header {
@@ -977,7 +994,7 @@ const logout = () => {
 .page-title {
   font-size: 32px;
   font-weight: 700;
-  color: #1d1d1f;
+  color: var(--text-primary);
   margin: 0 0 8px 0;
   letter-spacing: -0.5px;
 }
@@ -1019,13 +1036,13 @@ const logout = () => {
 }
 
 .action-btn.secondary {
-  background: rgba(0, 0, 0, 0.05);
-  color: #000000;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
 }
 
 .action-btn.secondary:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--input-focus-bg);
   transform: translateY(-2px);
 }
 
@@ -1041,7 +1058,7 @@ const logout = () => {
 .section-title {
   font-size: 24px;
   font-weight: 700;
-  color: #1d1d1f;
+  color: var(--text-primary);
   margin: 0 0 4px 0;
   letter-spacing: -0.3px;
 }
@@ -1066,10 +1083,10 @@ const logout = () => {
 
 /* 圆角卡片按钮样式 */
 .quick-card-button {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   border-radius: 20px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--glass-border);
   padding: 24px;
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1080,7 +1097,7 @@ const logout = () => {
   width: 100%;
   position: relative;
   overflow: hidden;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--card-shadow);
 }
 
 .quick-card-button:hover {
@@ -1090,20 +1107,20 @@ const logout = () => {
 }
 
 .quick-card-button.primary {
-  background: rgba(0, 0, 0, 0.05);
-  border-color: rgba(0, 0, 0, 0.1);
+  background: var(--input-bg);
+  border-color: var(--glass-border);
 }
 
 .quick-card-button.primary:hover {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--input-focus-bg);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
 }
 
 .quick-card {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--glass-border);
   padding: 20px;
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1122,17 +1139,17 @@ const logout = () => {
   width: 48px;
   height: 48px;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--input-bg);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #000000;
+  color: var(--text-primary);
   flex-shrink: 0;
 }
 
 .quick-icon.featured {
-  background: #000000;
-  color: white;
+  background: var(--button-bg);
+  color: var(--button-text);
 }
 
 .quick-info {
@@ -1142,7 +1159,7 @@ const logout = () => {
 .quick-title {
   font-size: 16px;
   font-weight: 600;
-  color: #1d1d1f;
+  color: var(--text-primary);
   margin: 0 0 4px 0;
 }
 
@@ -1155,13 +1172,13 @@ const logout = () => {
 
 /* 快速访问箭头 */
 .quick-arrow {
-  color: #86868b;
+  color: var(--text-secondary);
   transition: all 0.3s ease;
   opacity: 0.6;
 }
 
 .quick-card-button:hover .quick-arrow {
-  color: #000000;
+  color: var(--text-primary);
   opacity: 1;
   transform: translateX(4px);
 }
@@ -1187,7 +1204,7 @@ const logout = () => {
   align-items: center;
   justify-content: center;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
   backdrop-filter: blur(20px);
   position: relative;
   overflow: hidden;
@@ -1199,9 +1216,9 @@ const logout = () => {
 }
 
 .fab.secondary {
-  background: rgba(255, 255, 255, 0.9);
-  color: #000000;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
 }
 
 .fab:hover {
@@ -1214,7 +1231,7 @@ const logout = () => {
 }
 
 .fab.secondary:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--input-focus-bg);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
 }
 
@@ -1223,10 +1240,10 @@ const logout = () => {
 }
 
 .module-card {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   border-radius: 16px;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--glass-border);
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
@@ -1266,11 +1283,11 @@ const logout = () => {
   width: 48px;
   height: 48px;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--input-bg);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #000000;
+  color: var(--text-primary);
   flex-shrink: 0;
 }
 
@@ -1281,7 +1298,7 @@ const logout = () => {
 .card-title {
   font-size: 17px;
   font-weight: 600;
-  color: #1d1d1f;
+  color: var(--text-primary);
   margin: 0 0 4px 0;
 }
 
@@ -1356,7 +1373,7 @@ const logout = () => {
 }
 
 .stat-card.primary .stat-icon {
-  color: #000000;
+  color: var(--text-primary);
   opacity: 1;
 }
 
@@ -1481,7 +1498,7 @@ const logout = () => {
   top: 24px;
   right: 24px;
   opacity: 0.1;
-  color: #000000;
+  color: var(--text-primary);
 }
 
 /* 效率环形图 */
@@ -1654,19 +1671,19 @@ const logout = () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 40px;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--glass-bg);
   padding: 20px 30px;
   border-radius: 15px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--card-shadow);
   backdrop-filter: blur(10px);
 }
 
 .header h1 {
   margin: 0;
-  color: #333;
+  color: var(--text-primary);
   font-size: 32px;
   font-weight: 700;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: linear-gradient(135deg, var(--accent-blue), var(--light-3));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -1680,7 +1697,7 @@ const logout = () => {
 
 .username {
   font-size: 16px;
-  color: #333;
+  color: var(--text-primary);
   font-weight: 500;
 }
 
@@ -1713,20 +1730,20 @@ const logout = () => {
 }
 
 .action-card {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--glass-bg);
   padding: 30px;
   border-radius: 20px;
   cursor: pointer;
   transition: all 0.4s;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--card-shadow);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--glass-border);
 }
 
 .action-card:hover {
   transform: translateY(-8px);
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
-  background: rgba(255, 255, 255, 1);
+  background: var(--glass-bg);
 }
 
 .card-icon {
@@ -1738,29 +1755,29 @@ const logout = () => {
 .card-title {
   font-size: 24px;
   font-weight: 700;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 15px;
   text-align: center;
 }
 
 .card-description {
-  color: #666;
+  color: var(--text-secondary);
   text-align: center;
   line-height: 1.6;
   font-size: 16px;
 }
 
 .status-overview {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--glass-bg);
   padding: 30px;
   border-radius: 20px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--card-shadow);
   backdrop-filter: blur(10px);
 }
 
 .status-overview h2 {
   margin: 0 0 25px 0;
-  color: #333;
+  color: var(--text-primary);
   font-size: 24px;
   font-weight: 600;
   text-align: center;
@@ -1835,7 +1852,7 @@ const logout = () => {
 /* Mobile Layout Styles */
 .mobile-layout {
   min-height: 100vh;
-  background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+  background: var(--bg-primary);
   display: flex;
   flex-direction: column;
   padding-bottom: 70px; /* Space for bottom nav */
@@ -1846,9 +1863,9 @@ const logout = () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid var(--glass-border);
 }
 
 .mobile-user-info {
@@ -1865,7 +1882,7 @@ const logout = () => {
 .greeting {
   font-size: 18px;
   font-weight: 600;
-  color: #1d1d1f;
+  color: var(--text-primary);
 }
 
 .subtitle {
@@ -1874,11 +1891,11 @@ const logout = () => {
 }
 
 .mobile-logout {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--input-bg);
   border: none;
   padding: 8px;
   border-radius: 50%;
-  color: #1d1d1f;
+  color: var(--text-primary);
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -1971,7 +1988,7 @@ const logout = () => {
 
 .mobile-stat-card {
   flex: 1;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   padding: 16px;
   border-radius: 16px;
@@ -1999,7 +2016,7 @@ const logout = () => {
   display: block;
   font-size: 20px;
   font-weight: 700;
-  color: #1d1d1f;
+  color: var(--text-primary);
 }
 
 .mobile-stat-card .stat-label {
@@ -2014,10 +2031,10 @@ const logout = () => {
   left: 0;
   right: 0;
   height: 64px;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  border-top: 1px solid var(--glass-border);
   display: flex;
   justify-content: space-around;
   align-items: center;
@@ -2039,7 +2056,7 @@ const logout = () => {
 }
 
 .nav-tab.active {
-  color: #000000;
+  color: var(--text-primary);
 }
 
 .nav-tab svg {

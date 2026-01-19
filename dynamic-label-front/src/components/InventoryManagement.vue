@@ -119,8 +119,11 @@
                     </span>
                   </td>
                   <td>
-                    <button @click="viewItemDetails(item)" class="btn-icon">
+                    <button @click="viewItemDetails(item)" class="btn-icon" title="View Details">
                       👁️
+                    </button>
+                    <button @click="printItemLabel(item)" class="btn-icon" title="Print QR Label" style="margin-left: 8px;">
+                      🖨️
                     </button>
                   </td>
                 </tr>
@@ -483,7 +486,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 
 // 响应式数据
 const activeTab = ref('items')
@@ -605,12 +608,16 @@ const filteredTransactions = computed(() => {
   return filtered
 })
 
+// 监听变化自动重新加载
+watch([activeTab, searchQuery, sortBy], () => {
+  loadData()
+})
+
 // 生命周期
 onMounted(() => {
   checkDevice()
   window.addEventListener('resize', checkDevice)
-  loadMockData()
-  calculateStats()
+  refreshData()
 })
 
 onUnmounted(() => {
@@ -618,143 +625,143 @@ onUnmounted(() => {
 })
 
 // 方法
-const loadMockData = () => {
-  // 模拟商品数据
-  items.value = [
-    {
-      sku: 'PAD-001-XL',
-      name: '智能平板电脑 XL',
-      totalQty: 500,
-      availableQty: 450,
-      binCount: 3,
-      status: 'ACTIVE'
-    },
-    {
-      sku: 'LAP-002-15',
-      name: '笔记本电脑 15寸',
-      totalQty: 200,
-      availableQty: 180,
-      binCount: 2,
-      status: 'ACTIVE'
-    },
-    {
-      sku: 'PHN-003-6',
-      name: '智能手机 6寸',
-      totalQty: 1000,
-      availableQty: 50,
-      binCount: 5,
-      status: 'LOW_STOCK'
-    }
-  ]
-
-  // 模拟批次数据
-  lots.value = [
-    {
-      id: 1,
-      lot: 'L20250819-001',
-      sku: 'PAD-001-XL',
-      qty: 100,
-      uom: 'pcs',
-      bin: 'A1-03-02',
-      exp: '2026-08-19',
-      status: 'ACTIVE'
-    },
-    {
-      id: 2,
-      lot: 'L20250819-002',
-      sku: 'LAP-002-15',
-      qty: 50,
-      uom: 'pcs',
-      bin: 'B2-01-01',
-      exp: '2026-09-15',
-      status: 'ACTIVE'
-    }
-  ]
-
-  // 模拟库位数据
-  bins.value = [
-    {
-      id: 1,
-      bin_code: 'A1-03-02',
-      zone: 'A区',
-      capacity: 1000,
-      used: 750,
-      utilization: 75,
-      status: 'ACTIVE'
-    },
-    {
-      id: 2,
-      bin_code: 'B2-01-01',
-      zone: 'B区',
-      capacity: 800,
-      used: 200,
-      utilization: 25,
-      status: 'ACTIVE'
-    }
-  ]
-
-  // 模拟交易数据
-  transactions.value = [
-    {
-      id: 1,
-      timestamp: '2025-08-19T10:30:00Z',
-      type: 'INBOUND',
-      sku: 'PAD-001-XL',
-      qty: 100,
-      uom: 'pcs',
-      bin: 'A1-03-02',
-      user: 'admin',
-      status: 'COMPLETED'
-    },
-    {
-      id: 2,
-      timestamp: '2025-08-19T14:20:00Z',
-      type: 'OUTBOUND',
-      sku: 'LAP-002-15',
-      qty: 20,
-      uom: 'pcs',
-      bin: 'B2-01-01',
-      user: 'operator1',
-      status: 'COMPLETED'
-    }
-  ]
+// Helper Methods
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('token')
+  return {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  }
 }
 
-const calculateStats = () => {
-  stats.value.totalItems = items.value.length
-  stats.value.totalLots = lots.value.length
-  stats.value.totalBins = bins.value.length
-  stats.value.lowStock = items.value.filter(item => item.status === 'LOW_STOCK').length
+const loadStats = async () => {
+  try {
+    const response = await fetch('/api/inventory-management/stats', {
+      headers: getAuthHeaders()
+    })
+    const result = await response.json()
+    if (result.success) {
+      stats.value = {
+        totalItems: result.data.totalItems,
+        totalLots: result.data.totalLots,
+        totalBins: result.data.totalBins,
+        lowStock: result.data.lowStockCount
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load stats:', error)
+  }
+}
+
+const loadData = async () => {
+  try {
+    const params = new URLSearchParams({
+      search: searchQuery.value,
+      sortBy: sortBy.value || (activeTab.value === 'transactions' ? 'moment' : 'id'), // 'moment' or 'createdAt' depending on backend
+      limit: 100
+    })
+
+    let url = ''
+    if (activeTab.value === 'items') url = `/api/inventory-management/items?${params}`
+    else if (activeTab.value === 'lots') url = `/api/inventory-management/lots?${params}`
+    else if (activeTab.value === 'bins') url = `/api/inventory-management/bins?${params}`
+    else if (activeTab.value === 'transactions') url = `/api/inventory-management/transactions?${params}`
+
+    const response = await fetch(url, { headers: getAuthHeaders() })
+    const result = await response.json()
+
+    if (result.success) {
+      if (activeTab.value === 'items') {
+        items.value = result.data.items
+      } else if (activeTab.value === 'lots') {
+        // Map backend fields to frontend expected fields
+        lots.value = result.data.lots.map(l => ({
+          ...l,
+          lot: l.lot_number,
+          bin: l.bin?.bin_code || 'N/A',
+          exp: l.expiry_date
+        }))
+      } else if (activeTab.value === 'bins') {
+        bins.value = result.data.bins
+      } else if (activeTab.value === 'transactions') {
+        transactions.value = result.data.transactions.map(t => ({
+          ...t,
+          timestamp: t.transactionTime,
+          type: t.transactionType === 'in' ? 'INBOUND' : 'OUTBOUND',
+          sku: t.itemCode,
+          qty: t.quantity,
+          user: t.operator || 'System',
+          status: 'COMPLETED'
+        }))
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load data:', error)
+  }
 }
 
 const refreshData = () => {
-  loadMockData()
-  calculateStats()
+  loadStats()
+  loadData()
 }
 
-const exportData = () => {
-  const data = {
-    items: items.value,
-    lots: lots.value,
-    bins: bins.value,
-    transactions: transactions.value,
-    stats: stats.value,
-    exportTime: new Date().toISOString()
+const exportData = async () => {
+  try {
+    const response = await fetch('/api/inventory-management/export', { headers: getAuthHeaders() })
+    const result = await response.json()
+    if (result.success) {
+      const data = result.data
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `inventory-export-${new Date().toISOString().slice(0, 10)}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  } catch (error) {
+    console.error('Export failed:', error)
   }
-  
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `inventory-export-${new Date().toISOString().slice(0, 10)}.json`
-  a.click()
-  URL.revokeObjectURL(url)
 }
 
 const viewItemDetails = (item) => {
   selectedItem.value = item
   detailsModalTitle.value = `商品详情 - ${item.sku}`
   showDetailsModal.value = true
+}
+
+const printItemLabel = async (item) => {
+  if (!confirm(`Generate QR label for ${item.sku}?`)) return
+
+  try {
+    const response = await fetch('/api/print-center/print', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        templateId: 'ITEM-60x40',
+        printType: 'ITEM',
+        items: [{ sku: item.sku }],
+        options: { copies: 1, format: 'PDF' }
+      })
+    })
+    
+    const result = await response.json()
+    
+    if (result.success && result.data.download_url) {
+      // Create a temporary link to download the PDF
+      const link = document.createElement('a')
+      link.href = result.data.download_url
+      link.download = `Label-${item.sku}-${Date.now()}.pdf`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } else {
+      alert('Failed to generate label: ' + (result.message || 'Unknown error'))
+    }
+  } catch (error) {
+    console.error('Print error:', error)
+    alert('Error printing label: ' + error.message)
+  }
 }
 
 const viewLotDetails = (lot) => {

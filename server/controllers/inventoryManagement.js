@@ -15,15 +15,15 @@ const getInventoryStats = async (req, res) => {
       Item.count({ where: { status: 'ACTIVE' } }),
       Lot.count({ where: { status: 'ACTIVE' } }),
       Bin.count({ where: { status: 'ACTIVE' } }),
-      Item.count({ 
-        where: { 
+      Item.count({
+        where: {
           status: 'ACTIVE',
           '$lots.qty$': { [Op.lte]: 10 } // 库存少于10的商品
         },
         include: [{ model: Lot, as: 'lots' }]
       }),
-      Lot.count({ 
-        where: { 
+      Lot.count({
+        where: {
           status: 'ACTIVE',
           expiry_date: { [Op.lt]: new Date() }
         }
@@ -41,12 +41,12 @@ const getInventoryStats = async (req, res) => {
     const usedBins = await Lot.count({
       distinct: true,
       col: 'bin_code',
-      where: { 
+      where: {
         status: 'ACTIVE',
         quantity: { [Op.gt]: 0 }
       }
     })
-    
+
     const utilization = totalBins > 0 ? Math.round((usedBins / totalBins) * 100) : 0
 
     res.json({
@@ -77,7 +77,7 @@ const getInventoryStats = async (req, res) => {
 const getItems = async (req, res) => {
   try {
     const { page = 1, limit = 20, search, sortBy = 'sku', sortOrder = 'ASC' } = req.query
-    
+
     const whereClause = {}
     if (search) {
       whereClause[Op.or] = [
@@ -106,7 +106,7 @@ const getItems = async (req, res) => {
       const availableQty = lots
         .filter(lot => lot.status === 'ACTIVE')
         .reduce((sum, lot) => sum + lot.qty, 0)
-      
+
       return {
         ...item.toJSON(),
         totalQty,
@@ -141,7 +141,7 @@ const getItems = async (req, res) => {
 const getLots = async (req, res) => {
   try {
     const { page = 1, limit = 20, search, sortBy = 'lot_number', sortOrder = 'ASC' } = req.query
-    
+
     const whereClause = {}
     if (search) {
       whereClause[Op.or] = [
@@ -196,7 +196,7 @@ const getLots = async (req, res) => {
 const getBins = async (req, res) => {
   try {
     const { page = 1, limit = 20, search, sortBy = 'bin_code', sortOrder = 'ASC' } = req.query
-    
+
     const whereClause = {}
     if (search) {
       whereClause[Op.or] = [
@@ -223,7 +223,7 @@ const getBins = async (req, res) => {
       const lots = bin.lots || []
       const used = lots.reduce((sum, lot) => sum + lot.qty, 0)
       const utilization = bin.capacity > 0 ? Math.round((used / bin.capacity) * 100) : 0
-      
+
       return {
         ...bin.toJSON(),
         used,
@@ -257,12 +257,12 @@ const getBins = async (req, res) => {
 const getTransactions = async (req, res) => {
   try {
     const { page = 1, limit = 20, search, sortBy = 'createdAt', sortOrder = 'DESC' } = req.query
-    
+
     const whereClause = {}
     if (search) {
       whereClause[Op.or] = [
         { sku: { [Op.like]: `%${search}%` } },
-        { user: { [Op.like]: `%${search}%` } }
+        { operator: { [Op.like]: `%${search}%` } }
       ]
     }
 
@@ -345,12 +345,74 @@ const exportInventoryData = async (req, res) => {
   }
 }
 
+// 调整库存 (盘点)
+const adjustInventory = async (req, res) => {
+  const transaction = await require('../config/database').transaction();
+  try {
+    const { lot_number, actual_qty, reason } = req.body
+
+    // 1. 查找批次
+    const lot = await Lot.findOne({
+      where: { lot_number },
+      transaction
+    })
+
+    if (!lot) {
+      throw new Error('Lot not found')
+    }
+
+    const systemQty = lot.qty
+    const diff = actual_qty - systemQty
+
+    if (diff === 0) {
+      await transaction.rollback();
+      return res.json({ success: true, message: 'No adjustment needed', data: { lot } })
+    }
+
+    // 2. 更新库存
+    await lot.update({ qty: actual_qty }, { transaction })
+
+    // 3. 记录交易 (Audit Log)
+    await Transaction.create({
+      transactionType: diff > 0 ? 'in' : 'out',
+      itemCode: lot.sku,
+      itemName: lot.sku, // Ideally fetch name
+      quantity: Math.abs(diff),
+      beforeQuantity: systemQty,
+      afterQuantity: actual_qty,
+      operator: req.user?.username || 'system',
+      operatorId: req.user?.id,
+      notes: `Cycle Count Adjustment: ${reason || 'No reason provided'}`,
+      transactionTime: new Date()
+    }, { transaction })
+
+    await transaction.commit();
+
+    res.json({
+      success: true,
+      message: 'Inventory adjusted successfully',
+      data: {
+        lot_number,
+        old_qty: systemQty,
+        new_qty: actual_qty,
+        adjustment: diff
+      }
+    })
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Adjustment error:', error)
+    res.status(500).json({ success: false, message: error.message })
+  }
+}
+
 module.exports = {
   getInventoryStats,
   getItems,
   getLots,
   getBins,
   getTransactions,
-  exportInventoryData
+  exportInventoryData,
+  adjustInventory
 }
 

@@ -9,9 +9,9 @@ const KEY_PATH = path.join(CERT_DIR, 'key.pem')
 const httpsOptions =
   fs.existsSync(CERT_PATH) && fs.existsSync(KEY_PATH)
     ? {
-        key: fs.readFileSync(KEY_PATH),
-        cert: fs.readFileSync(CERT_PATH)
-      }
+      key: fs.readFileSync(KEY_PATH),
+      cert: fs.readFileSync(CERT_PATH)
+    }
     : false
 
 module.exports = defineConfig({
@@ -41,7 +41,7 @@ module.exports = defineConfig({
     }
   },
   pwa: {
-    name: '智能仓库管理系统',
+    name: 'Smart Warehouse',
     themeColor: '#000000',
     msTileColor: '#000000',
     appleMobileWebAppCapable: 'yes',

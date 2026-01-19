@@ -126,6 +126,19 @@
           </svg>
           Inventory Inquiry
         </button>
+        <button @click="handleProduction" class="action-btn production" style="background: #8b5cf6; color: white;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+          Production
+        </button>
+        <button @click="handleCount" class="action-btn count" style="background: #eab308; color: white;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 11l3 3L22 4"/>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          Count
+        </button>
         <button @click="clearResult" class="action-btn clear">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>
@@ -665,6 +678,128 @@ const handleInventory = () => {
   if (!scanResult.value) return
   // TODO: 调用库存查询API
   console.log('在庫照会を実行:', scanResult.value)
+}
+
+const handleProduction = async () => {
+  if (!scanResult.value) return
+  
+  // Try to find SKU
+  let sku = null
+  if (scanResult.value.parsed) {
+     if (scanResult.value.parsed.type === 'ITEM') sku = scanResult.value.parsed.id
+     else if (scanResult.value.parsed.sku) sku = scanResult.value.parsed.sku
+  }
+
+  if (!sku) {
+    statusMessage.value = 'Please scan an Item or Lot label first'
+    statusType.value = 'error'
+    return
+  }
+
+  const qtyStr = prompt(`Enter production quantity for ${sku}:`, '1')
+  if (!qtyStr) return
+  
+  const qty = parseFloat(qtyStr)
+  if (isNaN(qty) || qty <= 0) {
+    alert('Invalid quantity')
+    return
+  }
+
+  try {
+    statusMessage.value = 'Creating production run...'
+    statusType.value = 'info'
+    
+    // Call backend
+    const response = await fetch('/api/production/produce', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify({ sku, qty })
+    })
+
+    const result = await response.json()
+    if (result.success) {
+      statusMessage.value = `Production successful! New Lot: ${result.data.lot.lot_number}`
+      statusType.value = 'success'
+      alert(`Production Complete!\nNew Lot: ${result.data.lot.lot_number}\nMat. Consumed: ${result.data.consumed}`)
+    } else {
+      throw new Error(result.message)
+    }
+  } catch (error) {
+    console.error('Production error:', error)
+    statusMessage.value = 'Production failed: ' + error.message
+    statusType.value = 'error'
+    alert('Production failed: ' + error.message)
+  }
+}
+
+const handleCount = async () => {
+  if (!scanResult.value) return
+  
+  // Try to find Lot Number
+  let lotNumber = null
+  if (scanResult.value.parsed && scanResult.value.parsed.type === 'LOT') {
+    lotNumber = scanResult.value.parsed.id
+  }
+
+  if (!lotNumber) {
+    statusMessage.value = 'Please scan a LOT label for counting'
+    statusType.value = 'error'
+    return
+  }
+
+  const actualQtyStr = prompt(`Enter ACTUAL quantity for Lot ${lotNumber}:`)
+  if (!actualQtyStr) return
+  
+  const actualQty = parseFloat(actualQtyStr)
+  if (isNaN(actualQty) || actualQty < 0) {
+    alert('Invalid quantity')
+    return
+  }
+  
+  const reason = prompt('Enter reason for adjustment (optional):', 'Cycle Count')
+
+  try {
+    statusMessage.value = 'Submitting count result...'
+    statusType.value = 'info'
+    
+    // Call backend
+    const response = await fetch('/api/inventory-management/adjust', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify({ 
+        lot_number: lotNumber, 
+        actual_qty: actualQty,
+        reason: reason
+      })
+    })
+
+    const result = await response.json()
+    if (result.success) {
+      if (result.data.adjustment === 0) {
+        statusMessage.value = 'Count matched system record. No adjustment needed.'
+        statusType.value = 'success'
+        alert('Perfect match! No adjustment needed.')
+      } else {
+        const type = result.data.adjustment > 0 ? 'Surplus' : 'Loss'
+        statusMessage.value = `Adjustment recorded: ${type} of ${Math.abs(result.data.adjustment)}`
+        statusType.value = 'success'
+        alert(`Adjustment Recorded.\nOld Qty: ${result.data.old_qty}\nNew Qty: ${result.data.new_qty}\nVariance: ${result.data.adjustment}`)
+      }
+    } else {
+      throw new Error(result.message)
+    }
+  } catch (error) {
+    console.error('Count error:', error)
+    statusMessage.value = 'Count submission failed: ' + error.message
+    statusType.value = 'error'
+    alert('Count failed: ' + error.message)
+  }
 }
 
 const clearResult = () => {

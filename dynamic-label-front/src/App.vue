@@ -47,41 +47,47 @@ export default {
 <style>
 /* 全局样式 */
 :root {
-  /* Apple Glass Dark Mode Variables (Default) */
+  /* Apple Glass Theme Variables - Default (Dark) */
   --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-content: #121212;
   --text-primary: #F5F5F7;
   --text-secondary: #86868B;
   --text-tertiary: #6E6E73;
-  --glass-bg: rgba(30, 30, 30, 0.72);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --input-bg: rgba(255, 255, 255, 0.1);
-  --input-focus-bg: rgba(255, 255, 255, 0.15);
+  --glass-bg: rgba(28, 28, 30, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --input-bg: rgba(255, 255, 255, 0.08);
+  --input-focus-bg: rgba(255, 255, 255, 0.12);
   --button-bg: #FFFFFF;
   --button-text: #000000;
   --button-hover-bg: #E5E5E5;
   --accent-blue: #0A84FF;
-  --light-1: rgba(41, 151, 255, 0.15); /* Blue ambient */
-  --light-2: rgba(255, 45, 85, 0.15);  /* Pink ambient */
-  --light-3: rgba(175, 82, 222, 0.15); /* Purple ambient */
+  --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --light-1: rgba(41, 151, 255, 0.2);
+  --light-2: rgba(255, 45, 85, 0.15);
+  --light-3: rgba(175, 82, 222, 0.2);
 }
 
 [data-theme="light"] {
-  /* Light Mode Variables - Neutral Glass */
+  /* Light Mode Variables - Elegant White */
   --bg-primary: #F5F5F7;
+  --bg-secondary: #FFFFFF;
+  --bg-content: #F2F2F7;
   --text-primary: #1D1D1F;
-  --text-secondary: #86868B;
-  --text-tertiary: #6E6E73;
-  --glass-bg: rgba(255, 255, 255, 0.6);
-  --glass-border: rgba(0, 0, 0, 0.05);
+  --text-secondary: #86868b;
+  --text-tertiary: #6e6e73;
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(0, 0, 0, 0.08);
   --input-bg: rgba(0, 0, 0, 0.05);
   --input-focus-bg: rgba(0, 0, 0, 0.08);
-  --button-bg: #1D1D1F; /* Black Button */
+  --button-bg: #1D1D1F;
   --button-text: #FFFFFF;
   --button-hover-bg: #333333;
-  --accent-blue: #0071E3; /* Keep blue only for small accents */
-  --light-1: rgba(0, 0, 0, 0.03);
-  --light-2: rgba(0, 0, 0, 0.02);
-  --light-3: rgba(0, 0, 0, 0.02);
+  --accent-blue: #0071E3;
+  --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+  --light-1: rgba(0, 0, 0, 0.02);
+  --light-2: rgba(0, 0, 0, 0.01);
+  --light-3: rgba(0, 0, 0, 0.01);
 }
 
 body {

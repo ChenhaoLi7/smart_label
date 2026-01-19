@@ -8,6 +8,7 @@ import InventoryManagement from '../components/InventoryManagement.vue'
 import PrintCenter from '../components/PrintCenter.vue'
 import PurchaseManagement from '../components/PurchaseManagement.vue'
 import SalesManagement from '../components/SalesManagement.vue'
+import ProductionManagement from '../components/ProductionManagement.vue'
 import AiAssistant from '../components/AiAssistant.vue'
 
 const routes = [
@@ -64,6 +65,11 @@ const routes = [
     path: '/sales-management',
     name: 'SalesManagement',
     component: SalesManagement
+  },
+  {
+    path: '/production-management',
+    name: 'ProductionManagement',
+    component: ProductionManagement
   }
 ]
 

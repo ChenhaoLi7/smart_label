@@ -10,6 +10,7 @@ const printCenterRoutes = require('./printCenter')
 const scanRoutes = require('./scan')
 const purchaseRoutes = require('./purchase')
 const aiAgentRoutes = require('./aiAgent')
+const productionRoutes = require('./production')
 
 // 注册路由
 router.use('/auth', authRoutes)
@@ -19,6 +20,7 @@ router.use('/ai', aiAgentRoutes)
 router.use('/inventory-management', inventoryManagementRoutes)
 router.use('/print-center', printCenterRoutes)
 router.use('/scan', scanRoutes)
+router.use('/production', productionRoutes)
 
 // 健康检查
 router.get('/health', async (req, res) => {

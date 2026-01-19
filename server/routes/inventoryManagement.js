@@ -7,7 +7,8 @@ const {
   getLots,
   getBins,
   getTransactions,
-  exportInventoryData
+  exportInventoryData,
+  adjustInventory
 } = require('../controllers/inventoryManagement')
 
 // 所有路由都需要认证
@@ -30,5 +31,8 @@ router.get('/transactions', getTransactions)
 
 // 导出库存数据
 router.get('/export', exportInventoryData)
+
+// 调整库存 (盘点)
+router.post('/adjust', adjustInventory)
 
 module.exports = router

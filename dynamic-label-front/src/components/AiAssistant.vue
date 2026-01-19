@@ -214,10 +214,10 @@ onMounted(() => {
 /* Nav Header */
 .nav-header {
   height: 64px;
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid var(--glass-border);
   display: flex;
   align-items: center;
   z-index: 10;
@@ -250,7 +250,7 @@ onMounted(() => {
 }
 
 .back-btn:hover {
-  background: rgba(0,0,0,0.05);
+  background: var(--input-bg);
 }
 
 .logo {
@@ -266,7 +266,7 @@ onMounted(() => {
   font-size: 12px;
   padding: 4px 10px;
   border-radius: 12px;
-  background: rgba(0,0,0,0.05);
+  background: var(--input-bg);
   color: var(--text-secondary);
 }
 
@@ -448,7 +448,7 @@ td {
 .input-area {
   padding: 20px;
   background: var(--bg-primary);
-  border-top: 1px solid rgba(0,0,0,0.05);
+  border-top: 1px solid var(--glass-border);
 }
 
 .input-wrapper {
@@ -531,7 +531,4 @@ textarea {
   0%, 80%, 100% { transform: scale(0); }
   40% { transform: scale(1); }
 }
-
-[data-theme="light"] .nav-header { background: rgba(255,255,255,0.8); }
-[data-theme="dark"] .nav-header { background: rgba(0,0,0,0.8); }
 </style>
