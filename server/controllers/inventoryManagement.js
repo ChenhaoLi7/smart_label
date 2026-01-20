@@ -43,7 +43,7 @@ const getInventoryStats = async (req, res) => {
       col: 'bin_code',
       where: {
         status: 'ACTIVE',
-        quantity: { [Op.gt]: 0 }
+        qty: { [Op.gt]: 0 }
       }
     })
 
