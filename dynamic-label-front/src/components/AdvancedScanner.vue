@@ -765,12 +765,16 @@ const handleCount = async () => {
     statusMessage.value = 'Submitting count result...'
     statusType.value = 'info'
     
+    // 生成幂等性 Key（关键！确保重复请求不会创建重复记录）
+    const idempotencyKey = `count-${lotNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    
     // Call backend
     const response = await fetch('/api/inventory-management/adjust', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        'Idempotency-Key': idempotencyKey  // 添加幂等性 Key
       },
       body: JSON.stringify({ 
         lot_number: lotNumber, 

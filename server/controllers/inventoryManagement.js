@@ -351,6 +351,11 @@ const adjustInventory = async (req, res) => {
   try {
     const { lot_number, actual_qty, reason } = req.body
 
+    // 获取或生成幂等性 Key（关键修复！）
+    const idempotencyKey = req.headers['idempotency-key'] ||
+      req.headers['x-idempotency-key'] ||
+      `${req.user?.id || 'anon'}-${lot_number}-${Date.now()}`
+
     // 1. 查找批次
     const lot = await Lot.findOne({
       where: { lot_number },
@@ -372,7 +377,7 @@ const adjustInventory = async (req, res) => {
     // 2. 更新库存
     await lot.update({ qty: actual_qty }, { transaction })
 
-    // 3. 记录交易 (Audit Log)
+    // 3. 记录交易 (Audit Log) - 使用幂等性 Key
     await Transaction.create({
       transactionType: diff > 0 ? 'in' : 'out',
       itemCode: lot.sku,
@@ -383,7 +388,8 @@ const adjustInventory = async (req, res) => {
       operator: req.user?.username || 'system',
       operatorId: req.user?.id,
       notes: `Cycle Count Adjustment: ${reason || 'No reason provided'}`,
-      transactionTime: new Date()
+      transactionTime: new Date(),
+      idempotency_key: idempotencyKey  // 关键：使用客户端提供的 Key
     }, { transaction })
 
     await transaction.commit();
