@@ -163,6 +163,23 @@
       </div>
     </div>
 
+    <!-- 队列状态可视化 (新增) -->
+    <div v-if="requestQueue.length > 0" class="queue-status">
+      <h3>Background Tasks ({{ requestQueue.length }})</h3>
+      <div v-for="task in requestQueue" :key="task.id" class="queue-item" :class="task.status">
+        <div class="task-info">
+          <span class="task-desc">{{ task.desc }}</span>
+          <span class="task-time">{{ task.timestamp }}</span>
+        </div>
+        <div class="task-status">
+          <span v-if="task.status === 'pending'">⏳ Pending</span>
+          <span v-if="task.status === 'sending'">🔄 Sending...</span>
+          <span v-if="task.status === 'retrying'">⚠️ Retry ({{ task.retryCount }})</span>
+          <span v-if="task.status === 'success'">✅ Done</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 设备选择 -->
     <div v-if="devices.length > 1" class="device-selector">
       <label>Select Camera:</label>
@@ -198,6 +215,72 @@ let lightCheckInterval = null
 
 // 🔑 幂等性 Key 缓存（重试时复用）
 const currentCountKey = ref(null)  // { lotNumber: 'LOT-001', key: 'count-xxx' }
+
+// 🔑 幂等性与离线队列
+const requestQueue = ref([]) // [{ id, lot, qty, reason, status, retryCount, timestamp }]
+const isProcessingQueue = ref(false)
+
+// 队列处理逻辑 (Background Worker)
+const processQueue = async () => {
+  if (isProcessingQueue.value) return
+  isProcessingQueue.value = true
+
+  try {
+    // 找到所有待处理的任务 (pending 或 retrying)
+    const pendingTasks = requestQueue.value.filter(t => t.status === 'pending' || t.status === 'retrying')
+    
+    for (const task of pendingTasks) {
+      try {
+        task.status = 'sending'
+        console.log(`🚀 开始处理任务: ${task.id} (重试: ${task.retryCount})`)
+
+        await fetch('/api/inventory-management/adjust', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Idempotency-Key': task.id // 🔑 关键：死磕到底，绝不换 Key
+          },
+          body: JSON.stringify({ 
+            lot_number: task.lot, 
+            actual_qty: task.qty,
+            reason: task.reason
+          })
+        })
+        
+        // 成功！
+        task.status = 'success'
+        task.completedAt = new Date().toLocaleString()
+        console.log(`✅ 任务成功: ${task.id}`)
+        
+        // 3秒后从 UI 移除完成的任务
+        setTimeout(() => {
+           const idx = requestQueue.value.findIndex(t => t.id === task.id)
+           if (idx !== -1) requestQueue.value.splice(idx, 1)
+        }, 3000)
+
+      } catch (error) {
+        console.warn(`⚠️ 任务失败: ${task.id}`, error)
+        task.retryCount++
+        task.status = 'retrying'
+        task.lastError = error.message
+        // 继续处理下一个，不阻塞
+      }
+    }
+  } finally {
+    isProcessingQueue.value = false
+  }
+}
+
+// 启动后台轮询 (每 2 秒检查一次队列)
+let queueInterval = null
+onMounted(() => {
+  queueInterval = setInterval(processQueue, 2000)
+})
+
+onBeforeUnmount(() => {
+  if (queueInterval) clearInterval(queueInterval)
+})
 
 // 扫码模式
 const scanModes = [
@@ -777,52 +860,30 @@ const handleCount = async () => {
     console.log('♻️ 重试使用相同 Key:', currentCountKey.value.key)
   }
 
-  try {
-    statusMessage.value = 'Submitting count result...'
-    statusType.value = 'info'
-    
-    // Call backend - 使用缓存的 Key
-    const response = await fetch('/api/inventory-management/adjust', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        'Idempotency-Key': currentCountKey.value.key  // 使用缓存的 Key
-      },
-      body: JSON.stringify({ 
-        lot_number: lotNumber, 
-        actual_qty: actualQty,
-        reason: reason
-      })
-    })
-
-    const result = await response.json()
-    if (result.success) {
-      // ✅ 成功后清除缓存的 Key
-      currentCountKey.value = null
-      console.log('✅ 操作成功，Key已清除')
-      
-      if (result.data.adjustment === 0) {
-        statusMessage.value = 'Count matched system record. No adjustment needed.'
-        statusType.value = 'success'
-        alert('Perfect match! No adjustment needed.')
-      } else {
-        const type = result.data.adjustment > 0 ? 'Surplus' : 'Loss'
-        statusMessage.value = `Adjustment recorded: ${type} of ${Math.abs(result.data.adjustment)}`
-        statusType.value = 'success'
-        alert(`Adjustment Recorded.\nOld Qty: ${result.data.old_qty}\nNew Qty: ${result.data.new_qty}\nVariance: ${result.data.adjustment}`)
-      }
-    } else {
-      throw new Error(result.message)
-    }
-  } catch (error) {
-    console.error('Count error:', error)
-    // ⚠️ 失败时保留 Key，下次重试会使用相同 Key
-    console.warn('❌ 操作失败，Key保留供重试:', currentCountKey.value?.key)
-    statusMessage.value = 'Count submission failed: ' + error.message
-    statusType.value = 'error'
-    alert('Count failed: ' + error.message)
-  }
+  // ✅ 方案一：前端“死磕”模式 (Queue)
+  // 不直接发请求，而是加入队列
+  
+  const taskId = `count-${lotNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  
+  requestQueue.value.unshift({
+    id: taskId,
+    lot: lotNumber,
+    qty: actualQty,
+    reason: reason,
+    status: 'pending',
+    retryCount: 0,
+    timestamp: new Date().toLocaleString(),
+    desc: `Count Lot ${lotNumber}: ${actualQty}` 
+  })
+  
+  statusMessage.value = 'Task queued. Uploading in background...'
+  statusType.value = 'success'
+  
+  // 立即触发一次处理
+  processQueue()
+  
+  // 清除扫码结果，准备下一次扫描 (Fire and Forget!)
+  scanResult.value = null
 }
 
 const clearResult = () => {
@@ -1308,6 +1369,44 @@ const playScanSound = () => {
   border-radius: 6px;
   background: white;
   font-size: 0.9rem;
+}
+
+
+.queue-status {
+  margin-top: 20px;
+  background: white;
+  border-radius: 12px;
+  padding: 15px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.queue-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px;
+  border-bottom: 1px solid #eee;
+}
+
+.queue-item:last-child {
+  border-bottom: none;
+}
+
+.queue-item.success { color: #10b981; }
+.queue-item.retrying { color: #f59e0b; }
+.queue-item.sending { color: #3b82f6; }
+
+.task-desc { font-weight: bold; font-size: 14px; }
+.task-time { font-size: 12px; color: #666; margin-left: 8px; }
+
+@media (max-width: 640px) {
+  .scanner-header {
+    padding: 15px;
+  }
+  
+  .camera-video {
+    height: 300px;
+  }
 }
 
 @media (max-width: 768px) {
