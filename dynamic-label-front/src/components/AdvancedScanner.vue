@@ -195,11 +195,23 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 
-// ... (previous imports)
+
+import { BrowserMultiFormatReader } from '@zxing/browser'
+// import QRCode from 'qrcode' // 暂时注释，后续会用到
 
 // 响应式数据
 const videoRef = ref(null)
-// ... (other refs)
+const fileInput = ref(null)
+const isScanning = ref(false)
+const currentMode = ref('camera')
+const scanResult = ref(null)
+const statusMessage = ref('')
+const statusType = ref('info')
+const manualCode = ref('')
+const devices = ref([])
+const selectedDevice = ref('')
+const hasFlash = ref(false)
+const flashOn = ref(false)
 const isLowLight = ref(false) // 低光环境检测
 let lightCheckInterval = null
 
