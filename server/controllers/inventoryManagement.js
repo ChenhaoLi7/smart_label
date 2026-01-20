@@ -37,10 +37,10 @@ const getInventoryStats = async (req, res) => {
       })
     ])
 
-    // 计算库位利用率
+    // 计算库位利用率 - count unique bin_ids
     const usedBins = await Lot.count({
       distinct: true,
-      col: 'bin_code',
+      col: 'bin_id',
       where: {
         status: 'ACTIVE',
         qty: { [Op.gt]: 0 }
