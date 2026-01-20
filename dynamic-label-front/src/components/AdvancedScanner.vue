@@ -196,6 +196,9 @@ const flashOn = ref(false)
 const isLowLight = ref(false) // 低光环境检测
 let lightCheckInterval = null
 
+// 🔑 幂等性 Key 缓存（重试时复用）
+const currentCountKey = ref(null)  // { lotNumber: 'LOT-001', key: 'count-xxx' }
+
 // 扫码模式
 const scanModes = [
   { value: 'camera', label: '📷 Camera Scan', icon: '📷' },
@@ -756,25 +759,35 @@ const handleCount = async () => {
   const actualQty = parseFloat(actualQtyStr)
   if (isNaN(actualQty) || actualQty < 0) {
     alert('Invalid quantity')
+      alert('Invalid quantity')
     return
   }
   
   const reason = prompt('Enter reason for adjustment (optional):', 'Cycle Count')
 
+  // 🔑 关键改进：为这次业务操作生成唯一 Key，并缓存
+  // 如果是重试，使用相同的 key
+  if (!currentCountKey.value || currentCountKey.value.lotNumber !== lotNumber) {
+    currentCountKey.value = {
+      lotNumber: lotNumber,
+      key: `count-${lotNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    }
+    console.log('🔑 生成新的幂等性 Key:', currentCountKey.value.key)
+  } else {
+    console.log('♻️ 重试使用相同 Key:', currentCountKey.value.key)
+  }
+
   try {
     statusMessage.value = 'Submitting count result...'
     statusType.value = 'info'
     
-    // 生成幂等性 Key（关键！确保重复请求不会创建重复记录）
-    const idempotencyKey = `count-${lotNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    
-    // Call backend
+    // Call backend - 使用缓存的 Key
     const response = await fetch('/api/inventory-management/adjust', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        'Idempotency-Key': idempotencyKey  // 添加幂等性 Key
+        'Idempotency-Key': currentCountKey.value.key  // 使用缓存的 Key
       },
       body: JSON.stringify({ 
         lot_number: lotNumber, 
@@ -785,6 +798,10 @@ const handleCount = async () => {
 
     const result = await response.json()
     if (result.success) {
+      // ✅ 成功后清除缓存的 Key
+      currentCountKey.value = null
+      console.log('✅ 操作成功，Key已清除')
+      
       if (result.data.adjustment === 0) {
         statusMessage.value = 'Count matched system record. No adjustment needed.'
         statusType.value = 'success'
@@ -800,6 +817,8 @@ const handleCount = async () => {
     }
   } catch (error) {
     console.error('Count error:', error)
+    // ⚠️ 失败时保留 Key，下次重试会使用相同 Key
+    console.warn('❌ 操作失败，Key保留供重试:', currentCountKey.value?.key)
     statusMessage.value = 'Count submission failed: ' + error.message
     statusType.value = 'error'
     alert('Count failed: ' + error.message)
