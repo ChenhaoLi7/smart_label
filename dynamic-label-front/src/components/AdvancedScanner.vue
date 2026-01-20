@@ -193,32 +193,27 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { BrowserMultiFormatReader } from '@zxing/browser'
-// import QRCode from 'qrcode' // 暂时注释，后续会用到
+import { ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+
+// ... (previous imports)
 
 // 响应式数据
 const videoRef = ref(null)
-const fileInput = ref(null)
-const isScanning = ref(false)
-const currentMode = ref('camera')
-const scanResult = ref(null)
-const statusMessage = ref('')
-const statusType = ref('info')
-const manualCode = ref('')
-const devices = ref([])
-const selectedDevice = ref('')
-const hasFlash = ref(false)
-const flashOn = ref(false)
+// ... (other refs)
 const isLowLight = ref(false) // 低光环境检测
 let lightCheckInterval = null
 
-// 🔑 幂等性 Key 缓存（重试时复用）
-const currentCountKey = ref(null)  // { lotNumber: 'LOT-001', key: 'count-xxx' }
-
 // 🔑 幂等性与离线队列
-const requestQueue = ref([]) // [{ id, lot, qty, reason, status, retryCount, timestamp }]
+// 1. 从 LocalStorage 初始化队列 (Persistence)
+const savedQueue = localStorage.getItem('offlineQueue')
+const requestQueue = ref(savedQueue ? JSON.parse(savedQueue) : []) 
+
 const isProcessingQueue = ref(false)
+
+// 2. 监听队列变化自动保存
+watch(requestQueue, (newQueue) => {
+  localStorage.setItem('offlineQueue', JSON.stringify(newQueue))
+}, { deep: true })
 
 // 队列处理逻辑 (Background Worker)
 const processQueue = async () => {
