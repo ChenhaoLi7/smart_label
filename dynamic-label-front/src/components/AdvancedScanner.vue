@@ -844,10 +844,6 @@ const handleCount = async () => {
   }
 
   const actualQtyStr = prompt(`Enter ACTUAL quantity for Lot ${lotNumber}:`)
-  if (!actualQtyStr) return
-  
-  const actualQty = parseFloat(actualQtyStr)
-  if (isNaN(actualQty) || actualQty < 0) {
     alert('Invalid quantity')
       alert('Invalid quantity')
     return
