@@ -56,12 +56,11 @@ start_ai() {
     
     if [ ! -d "venv" ]; then
         echo "创建Python虚拟环境..."
-        python -m venv venv
+        python3 -m venv venv
+        venv/bin/pip install fastapi uvicorn numpy pandas scikit-learn tensorflow joblib pydantic
     fi
     
-    source venv/bin/activate
-    pip install -r requirements.txt
-    python app.py &
+    venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 &
     AI_PID=$!
     echo "✅ AI服务已启动 (PID: $AI_PID)"
 }
