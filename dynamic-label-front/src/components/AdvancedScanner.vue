@@ -844,21 +844,6 @@ const handleCount = async () => {
   }
 
   const actualQtyStr = prompt(`Enter ACTUAL quantity for Lot ${lotNumber}:`)
-    alert('Invalid quantity')
-      alert('Invalid quantity')
-    return
-  }
-  
-  const reason = prompt('Enter reason for adjustment (optional):', 'Cycle Count')
-
-  // 🔑 关键改进：为这次业务操作生成唯一 Key，并缓存
-  // 如果是重试，使用相同的 key
-  if (!currentCountKey.value || currentCountKey.value.lotNumber !== lotNumber) {
-    currentCountKey.value = {
-      lotNumber: lotNumber,
-      key: `count-${lotNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    }
-    const actualQtyStr = prompt(`Enter ACTUAL quantity for Lot ${lotNumber}:`)
   if (!actualQtyStr) return
   
   const actualQty = parseFloat(actualQtyStr)
@@ -868,14 +853,9 @@ const handleCount = async () => {
   }
   
   const reason = prompt('Enter reason for adjustment (optional):', 'Cycle Count')
-    console.log('🔑 生成新的幂等性 Key:', currentCountKey.value.key)
-  } else {
-    console.log('♻️ 重试使用相同 Key:', currentCountKey.value.key)
-  }
 
-  // ✅ 方案一：前端“死磕”模式 (Queue)
+  // ✅ 方案一：前端"死磕"模式 (Queue)
   // 不直接发请求，而是加入队列
-  
   const taskId = `count-${lotNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   
   requestQueue.value.unshift({
