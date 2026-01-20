@@ -401,6 +401,18 @@ const adjustInventory = async (req, res) => {
 
   } catch (error) {
     await transaction.rollback();
+
+    // 幂等性处理：检测重复操作
+    if (error.name === 'SequelizeUniqueConstraintError' &&
+      error.parent?.code === 'ER_DUP_ENTRY') {
+      console.log('⚠️ 检测到重复操作，已忽略（幂等性保护）');
+      return res.json({
+        success: true,
+        message: 'Operation already processed (idempotency)',
+        data: { lot_number: req.body.lot_number }
+      });
+    }
+
     console.error('Adjustment error:', error)
     res.status(500).json({ success: false, message: error.message })
   }
