@@ -345,18 +345,18 @@ const exportInventoryData = async (req, res) => {
   }
 }
 
-// 调整库存 (盘点)
+// 调整库存 (盘点) - 使用乐观锁
 const adjustInventory = async (req, res) => {
   const transaction = await require('../config/database').transaction();
   try {
     const { lot_number, actual_qty, reason } = req.body
 
-    // 获取或生成幂等性 Key（关键修复！）
+    // 获取幂等性 Key
     const idempotencyKey = req.headers['idempotency-key'] ||
       req.headers['x-idempotency-key'] ||
       `${req.user?.id || 'anon'}-${lot_number}-${Date.now()}`
 
-    // 1. 查找批次
+    // 1. 查找批次（读取当前版本号）
     const lot = await Lot.findOne({
       where: { lot_number },
       transaction
@@ -367,6 +367,7 @@ const adjustInventory = async (req, res) => {
     }
 
     const systemQty = lot.qty
+    const currentVersion = lot.version || 0  // 读取版本号
     const diff = actual_qty - systemQty
 
     if (diff === 0) {
@@ -374,14 +375,36 @@ const adjustInventory = async (req, res) => {
       return res.json({ success: true, message: 'No adjustment needed', data: { lot } })
     }
 
-    // 2. 更新库存
-    await lot.update({ qty: actual_qty }, { transaction })
+    // 2. 使用乐观锁更新库存（版本号必须匹配）
+    const [updatedRows] = await Lot.update(
+      {
+        qty: actual_qty,
+        version: currentVersion + 1  // 版本号 +1
+      },
+      {
+        where: {
+          lot_number,
+          version: currentVersion  // 🔐 关键：只有版本匹配才更新
+        },
+        transaction
+      }
+    )
 
-    // 3. 记录交易 (Audit Log) - 使用幂等性 Key
+    // 3. 检查是否更新成功
+    if (updatedRows === 0) {
+      await transaction.rollback();
+      return res.status(409).json({
+        success: false,
+        message: '数据已被其他用户修改，请刷新后重试 (Concurrent modification detected)',
+        error: 'VERSION_CONFLICT'
+      })
+    }
+
+    // 4. 记录交易 (Audit Log)
     await Transaction.create({
       transactionType: diff > 0 ? 'in' : 'out',
       itemCode: lot.sku,
-      itemName: lot.sku, // Ideally fetch name
+      itemName: lot.sku,
       quantity: Math.abs(diff),
       beforeQuantity: systemQty,
       afterQuantity: actual_qty,
@@ -389,7 +412,7 @@ const adjustInventory = async (req, res) => {
       operatorId: req.user?.id,
       notes: `Cycle Count Adjustment: ${reason || 'No reason provided'}`,
       transactionTime: new Date(),
-      idempotency_key: idempotencyKey  // 关键：使用客户端提供的 Key
+      idempotency_key: idempotencyKey
     }, { transaction })
 
     await transaction.commit();
@@ -401,14 +424,15 @@ const adjustInventory = async (req, res) => {
         lot_number,
         old_qty: systemQty,
         new_qty: actual_qty,
-        adjustment: diff
+        adjustment: diff,
+        version: currentVersion + 1
       }
     })
 
   } catch (error) {
     await transaction.rollback();
 
-    // 幂等性处理：检测重复操作
+    // 幂等性处理
     if (error.name === 'SequelizeUniqueConstraintError' &&
       error.parent?.code === 'ER_DUP_ENTRY') {
       console.log('⚠️ 检测到重复操作，已忽略（幂等性保护）');
