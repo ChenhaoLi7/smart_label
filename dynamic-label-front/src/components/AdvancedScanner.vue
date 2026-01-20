@@ -858,6 +858,16 @@ const handleCount = async () => {
       lotNumber: lotNumber,
       key: `count-${lotNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     }
+    const actualQtyStr = prompt(`Enter ACTUAL quantity for Lot ${lotNumber}:`)
+  if (!actualQtyStr) return
+  
+  const actualQty = parseFloat(actualQtyStr)
+  if (isNaN(actualQty) || actualQty < 0) {
+    alert('Invalid quantity')
+    return
+  }
+  
+  const reason = prompt('Enter reason for adjustment (optional):', 'Cycle Count')
     console.log('🔑 生成新的幂等性 Key:', currentCountKey.value.key)
   } else {
     console.log('♻️ 重试使用相同 Key:', currentCountKey.value.key)
