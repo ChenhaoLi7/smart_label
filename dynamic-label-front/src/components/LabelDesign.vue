@@ -311,8 +311,9 @@
               <label>Bind Product:</label>
               <select v-model="boundProduct" @change="updateDynamicFields" class="property-select">
                 <option :value="null">None (Design Mode)</option>
-                <option v-for="item in mockInventory" :key="item.sku" :value="item">
-                  {{ item.name }}
+                <option v-if="inventoryLoading" disabled>Loading inventory...</option>
+                <option v-for="item in inventoryItems" :key="item.sku" :value="item">
+                  {{ item.name }} ({{ item.sku }})
                 </option>
               </select>
             </div>
@@ -322,14 +323,30 @@
                 <span class="value">{{ boundProduct.sku }}</span>
               </div>
               <div class="info-row">
-                <span class="label">Price:</span>
-                <span class="value">${{ boundProduct.price }}</span>
+                <span class="label">Category:</span>
+                <span class="value">{{ boundProduct.category || 'Uncategorized' }}</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Available:</span>
+                <span class="value">{{ boundProduct.availableStock ?? 0 }} {{ boundProduct.uom || 'pcs' }}</span>
               </div>
             </div>
           </div>
 
           <div class="property-section">
             <h4>Template Management</h4>
+            <div class="property-group">
+              <label>Print Type:</label>
+              <select v-model="templatePrintType" class="property-select">
+                <option value="ITEM">ITEM</option>
+                <option value="LOT">LOT</option>
+                <option value="BIN">BIN</option>
+              </select>
+            </div>
+            <div class="property-group">
+              <label>Cloud Status:</label>
+              <span>{{ templatesLoading ? 'Syncing templates...' : `${savedTemplates.length} template(s) saved` }}</span>
+            </div>
             <div class="template-actions">
               <button @click="saveTemplate" class="btn btn-success btn-sm">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -351,13 +368,14 @@
               </button>
             </div>
             <div class="template-list">
-              <div class="template-item" v-for="template in savedTemplates" :key="template.id" @click="applyTemplate(template)">
+              <div class="template-item" :class="{ active: activeTemplateId === template.id }" v-for="template in savedTemplates" :key="template.id" @click="applyTemplate(template)">
                 <div class="template-preview">
-                  <img :src="template.preview" :alt="template.name">
+                  <img v-if="template.preview" :src="template.preview" :alt="template.name">
+                  <div v-else class="template-placeholder">{{ template.printTypes?.[0] || 'LBL' }}</div>
                 </div>
                 <div class="template-info">
                   <span class="template-name">{{ template.name }}</span>
-                  <span class="template-size">{{ template.size }}</span>
+                  <span class="template-size">{{ template.size.width }}×{{ template.size.height }}{{ template.size.unit }}</span>
                 </div>
               </div>
             </div>
@@ -668,34 +686,23 @@ const showGrid = ref(false)
 const showRulers = ref(false)
 const showAlignmentGuides = ref(false)
 const alignmentGuides = ref([])
-const savedTemplates = ref([
-  {
-    id: 1,
-    name: '产品标签',
-    size: '100×60mm',
-    preview: '/api/templates/product-preview.png'
-  },
-  {
-    id: 2,
-    name: '仓库标签',
-    size: '80×50mm',
-    preview: '/api/templates/warehouse-preview.png'
-  }
-])
+const savedTemplates = ref([])
+const templatesLoading = ref(false)
+const inventoryItems = ref([])
+const inventoryLoading = ref(false)
+const activeTemplateId = ref('')
+const templatePrintType = ref('ITEM')
+const pendingBoundSku = ref('')
 
 // Data Binding
 const boundProduct = ref(null)
-const mockInventory = [
-  { sku: 'PAD-001-XL', name: 'Smart Tablet XL', price: 599.00, description: '12-inch High Performance Tablet' },
-  { sku: 'LAP-002-15', name: 'Pro Laptop 15"', price: 1299.00, description: 'Professional Workstation Laptop' },
-  { sku: 'PHN-003-6', name: 'Smartphone 6"', price: 899.00, description: 'Latest Gen Smartphone' },
-  { sku: 'WCH-004-S', name: 'Smart Watch S', price: 299.00, description: 'Fitness Tracking Smart Watch' }
-]
 
 // 生命周期
 onMounted(async () => {
   await nextTick()
   initCanvas()
+  updatePaperSize()
+  await Promise.all([loadSavedTemplates(), loadInventoryItems()])
 })
 
 onBeforeUnmount(() => {
@@ -744,6 +751,100 @@ onBeforeUnmount(() => {
     // 鼠标点击事件 - 处理画布点击和元素点击
     fabricCanvas.value.on('mouse:down', handleMouseDown)
   }
+
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${localStorage.getItem('token')}`
+})
+
+const paperSizePresets = {
+  '50x30': { width: 400, height: 240, mmWidth: 50, mmHeight: 30 },
+  '100x60': { width: 800, height: 480, mmWidth: 100, mmHeight: 60 },
+  '80x50': { width: 640, height: 400, mmWidth: 80, mmHeight: 50 },
+  '120x80': { width: 960, height: 640, mmWidth: 120, mmHeight: 80 }
+}
+
+const printTypeTemplateMap = {
+  ITEM: 'product',
+  BIN: 'warehouse',
+  LOT: 'shipping'
+}
+
+const findPaperSizePreset = (width, height) => {
+  const numericWidth = Number(width)
+  const numericHeight = Number(height)
+
+  return Object.entries(paperSizePresets).find(([, preset]) => {
+    return preset.width === numericWidth || (preset.mmWidth === numericWidth && preset.mmHeight === numericHeight)
+  })?.[0] || 'custom'
+}
+
+const syncBoundProductFromPendingSku = () => {
+  if (!pendingBoundSku.value) return
+
+  const matched = inventoryItems.value.find(item => item.sku === pendingBoundSku.value)
+  if (matched) {
+    boundProduct.value = matched
+    pendingBoundSku.value = ''
+    updateDynamicFields()
+  }
+}
+
+const loadSavedTemplates = async () => {
+  templatesLoading.value = true
+
+  try {
+    const response = await fetch('/api/print-center/templates', {
+      headers: getAuthHeaders()
+    })
+    const result = await response.json()
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Failed to load templates')
+    }
+
+    savedTemplates.value = result.data || []
+  } catch (error) {
+    console.error('加载模板失败:', error)
+    alert(`Failed to load templates: ${error.message}`)
+  } finally {
+    templatesLoading.value = false
+  }
+}
+
+const loadInventoryItems = async () => {
+  inventoryLoading.value = true
+
+  try {
+    const response = await fetch('/api/inventory-management/items?limit=100', {
+      headers: getAuthHeaders()
+    })
+    const result = await response.json()
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Failed to load inventory items')
+    }
+
+    inventoryItems.value = result.data.items || []
+    syncBoundProductFromPendingSku()
+  } catch (error) {
+    console.error('加载商品列表失败:', error)
+    alert(`Failed to load inventory items: ${error.message}`)
+  } finally {
+    inventoryLoading.value = false
+  }
+}
+
+const nextElementId = (preferredId) => {
+  const numericId = Number(preferredId)
+  if (Number.isFinite(numericId) && numericId > 0) {
+    elementCounter.value = Math.max(elementCounter.value, numericId)
+    return numericId
+  }
+
+  elementCounter.value += 1
+  return elementCounter.value
+}
 
 // 拖拽开始
 const onDragStart = (event, componentType) => {
@@ -802,26 +903,32 @@ const onDrop = (event) => {
 }
 
 // 创建文本元素
-const createTextElement = (x, y) => {
-  const textElement = new fabric.Text('新文本', {
-    left: x,
-    top: y,
-    fontSize: 16,
-    fill: '#000000',
-    fontWeight: 'normal',
-    id: ++elementCounter.value,
+const createTextElement = (x, y, options = {}) => {
+  const textValue = options.text ?? '新文本'
+  const textElement = new fabric.Text(textValue, {
+    left: options.left ?? x,
+    top: options.top ?? y,
+    fontSize: options.fontSize ?? 16,
+    fill: options.fill ?? '#000000',
+    fontWeight: options.fontWeight ?? 'normal',
+    angle: options.angle ?? 0,
+    scaleX: options.scaleX ?? 1,
+    scaleY: options.scaleY ?? 1,
+    id: nextElementId(options.id),
     type: 'text',
-    text: '新文本'
+    text: textValue
   })
   
   fabricCanvas.value.add(textElement)
-  fabricCanvas.value.setActiveObject(textElement)
-  handleSelection({ target: textElement })
+  if (!options.skipFocus) {
+    fabricCanvas.value.setActiveObject(textElement)
+    handleSelection({ target: textElement })
+  }
   updateCanvasObjects()
 }
 
 // 创建动态字段元素
-const createDynamicFieldElement = (x, y, fieldType) => {
+const createDynamicFieldElement = (x, y, fieldType, options = {}) => {
   // 定义占位符文本
   const placeholders = {
     SKU: 'SKU-XXXXXX',
@@ -831,79 +938,98 @@ const createDynamicFieldElement = (x, y, fieldType) => {
     DATE: '2025-09-24'
   }
   
-  const placeholderText = placeholders[fieldType] || 'Dynamic Field'
+  const resolvedFieldType = options.fieldType || fieldType
+  const placeholderText = options.text || placeholders[resolvedFieldType] || 'Dynamic Field'
   
   const dynamicElement = new fabric.Text(placeholderText, {
-    left: x,
-    top: y,
-    fontSize: 16,
-    fill: '#0066CC', // 蓝色表示动态字段
-    fontWeight: 'bold',
-    id: ++elementCounter.value,
+    left: options.left ?? x,
+    top: options.top ?? y,
+    fontSize: options.fontSize ?? 16,
+    fill: options.fill ?? '#0066CC',
+    fontWeight: options.fontWeight ?? 'bold',
+    angle: options.angle ?? 0,
+    scaleX: options.scaleX ?? 1,
+    scaleY: options.scaleY ?? 1,
+    id: nextElementId(options.id),
     type: 'dynamic-field',
-    fieldType: fieldType,
+    fieldType: resolvedFieldType,
     text: placeholderText,
     isDynamic: true
   })
   
   fabricCanvas.value.add(dynamicElement)
-  fabricCanvas.value.setActiveObject(dynamicElement)
-  handleSelection({ target: dynamicElement })
+  if (!options.skipFocus) {
+    fabricCanvas.value.setActiveObject(dynamicElement)
+    handleSelection({ target: dynamicElement })
+  }
   updateCanvasObjects()
 }
 
 // 创建矩形元素
-const createRectangleElement = (x, y) => {
+const createRectangleElement = (x, y, options = {}) => {
   const rectElement = new fabric.Rect({
-    left: x,
-    top: y,
-    width: 100,
-    height: 60,
-    fill: 'transparent',
-    stroke: '#000000',
-    strokeWidth: 2,
-    id: ++elementCounter.value,
+    left: options.left ?? x,
+    top: options.top ?? y,
+    width: options.width ?? 100,
+    height: options.height ?? 60,
+    fill: options.fill ?? 'transparent',
+    stroke: options.stroke ?? '#000000',
+    strokeWidth: options.strokeWidth ?? 2,
+    angle: options.angle ?? 0,
+    scaleX: options.scaleX ?? 1,
+    scaleY: options.scaleY ?? 1,
+    id: nextElementId(options.id),
     type: 'rectangle'
   })
   
   fabricCanvas.value.add(rectElement)
-  fabricCanvas.value.setActiveObject(rectElement)
-  handleSelection({ target: rectElement })
+  if (!options.skipFocus) {
+    fabricCanvas.value.setActiveObject(rectElement)
+    handleSelection({ target: rectElement })
+  }
   updateCanvasObjects()
 }
 
 // 创建圆形元素
-const createCircleElement = (x, y) => {
+const createCircleElement = (x, y, options = {}) => {
   const circleElement = new fabric.Circle({
-    left: x,
-    top: y,
-    radius: 30,
-    fill: 'transparent',
-    stroke: '#000000',
-    strokeWidth: 2,
-    id: ++elementCounter.value,
+    left: options.left ?? x,
+    top: options.top ?? y,
+    radius: options.radius ?? 30,
+    fill: options.fill ?? 'transparent',
+    stroke: options.stroke ?? '#000000',
+    strokeWidth: options.strokeWidth ?? 2,
+    angle: options.angle ?? 0,
+    scaleX: options.scaleX ?? 1,
+    scaleY: options.scaleY ?? 1,
+    id: nextElementId(options.id),
     type: 'circle'
   })
   
   fabricCanvas.value.add(circleElement)
-  fabricCanvas.value.setActiveObject(circleElement)
-  handleSelection({ target: circleElement })
+  if (!options.skipFocus) {
+    fabricCanvas.value.setActiveObject(circleElement)
+    handleSelection({ target: circleElement })
+  }
   updateCanvasObjects()
 }
 
 // 创建条码元素
-const createBarcodeElement = (x, y) => {
+const createBarcodeElement = (x, y, options = {}) => {
   try {
-    const barcodeData = '123456789'
+    const barcodeData = options.barcodeData || '123456789'
     
     // 创建条码占位符 - 使用矩形和线条模拟条码
     const barcodeGroup = new fabric.Group([], {
-      left: x,
-      top: y,
-      id: ++elementCounter.value,
+      left: options.left ?? x,
+      top: options.top ?? y,
+      angle: options.angle ?? 0,
+      scaleX: options.scaleX ?? 1,
+      scaleY: options.scaleY ?? 1,
+      id: nextElementId(options.id),
       type: 'barcode',
       barcodeData: barcodeData,
-      barcodeFormat: 'CODE128'
+      barcodeFormat: options.barcodeFormat || 'CODE128'
     })
     
     // 添加条码背景
@@ -942,8 +1068,10 @@ const createBarcodeElement = (x, y) => {
     barcodeGroup.add(background, ...bars, text)
     
     fabricCanvas.value.add(barcodeGroup)
-    fabricCanvas.value.setActiveObject(barcodeGroup)
-    handleSelection({ target: barcodeGroup })
+    if (!options.skipFocus) {
+      fabricCanvas.value.setActiveObject(barcodeGroup)
+      handleSelection({ target: barcodeGroup })
+    }
     updateCanvasObjects()
   } catch (error) {
     console.error('创建条码失败:', error)
@@ -951,19 +1079,22 @@ const createBarcodeElement = (x, y) => {
 }
 
 // 创建二维码元素
-const createQRCodeElement = (x, y) => {
+const createQRCodeElement = (x, y, options = {}) => {
   try {
-    const qrData = 'https://example.com'
+    const qrData = options.qrData || 'https://example.com'
     
     // 创建二维码占位符 - 使用矩形模拟二维码
     const qrGroup = new fabric.Group([], {
-      left: x,
-      top: y,
-      id: ++elementCounter.value,
+      left: options.left ?? x,
+      top: options.top ?? y,
+      angle: options.angle ?? 0,
+      scaleX: options.scaleX ?? 1,
+      scaleY: options.scaleY ?? 1,
+      id: nextElementId(options.id),
       type: 'qrcode',
       qrData: qrData,
-      qrSize: 100,
-      qrType: 'URL'
+      qrSize: options.qrSize || 100,
+      qrType: options.qrType || 'URL'
     })
     
     // 添加二维码背景
@@ -1037,8 +1168,10 @@ const createQRCodeElement = (x, y) => {
     qrGroup.add(background, ...squares, text)
     
     fabricCanvas.value.add(qrGroup)
-    fabricCanvas.value.setActiveObject(qrGroup)
-    handleSelection({ target: qrGroup })
+    if (!options.skipFocus) {
+      fabricCanvas.value.setActiveObject(qrGroup)
+      handleSelection({ target: qrGroup })
+    }
     updateCanvasObjects()
   } catch (error) {
     console.error('创建二维码失败:', error)
@@ -1378,13 +1511,271 @@ const updateCanvasBackground = () => {
 const newDesign = () => {
   if (fabricCanvas.value) {
     fabricCanvas.value.clear()
+    fabricCanvas.value.backgroundColor = canvasBackground.value
     selectedElement.value = null
+    activeTemplateId.value = ''
+    boundProduct.value = null
+    pendingBoundSku.value = ''
+    elementCounter.value = 0
+    fabricCanvas.value.renderAll()
     updateCanvasObjects()
   }
 }
 
-const saveDesign = () => {
-  alert('保存设计功能待实现')
+const serializeCanvasObject = (object) => {
+  const kind = object.type
+
+  if (kind === 'text') {
+    return {
+      kind,
+      id: object.id,
+      left: object.left,
+      top: object.top,
+      angle: object.angle || 0,
+      scaleX: object.scaleX || 1,
+      scaleY: object.scaleY || 1,
+      text: object.text,
+      fontSize: object.fontSize,
+      fill: object.fill,
+      fontWeight: object.fontWeight
+    }
+  }
+
+  if (kind === 'dynamic-field') {
+    return {
+      kind,
+      id: object.id,
+      left: object.left,
+      top: object.top,
+      angle: object.angle || 0,
+      scaleX: object.scaleX || 1,
+      scaleY: object.scaleY || 1,
+      text: object.text,
+      fontSize: object.fontSize,
+      fill: object.fill,
+      fontWeight: object.fontWeight,
+      fieldType: object.fieldType
+    }
+  }
+
+  if (kind === 'rectangle') {
+    return {
+      kind,
+      id: object.id,
+      left: object.left,
+      top: object.top,
+      angle: object.angle || 0,
+      scaleX: object.scaleX || 1,
+      scaleY: object.scaleY || 1,
+      width: object.width,
+      height: object.height,
+      fill: object.fill,
+      stroke: object.stroke,
+      strokeWidth: object.strokeWidth
+    }
+  }
+
+  if (kind === 'circle') {
+    return {
+      kind,
+      id: object.id,
+      left: object.left,
+      top: object.top,
+      angle: object.angle || 0,
+      scaleX: object.scaleX || 1,
+      scaleY: object.scaleY || 1,
+      radius: object.radius,
+      fill: object.fill,
+      stroke: object.stroke,
+      strokeWidth: object.strokeWidth
+    }
+  }
+
+  if (kind === 'barcode') {
+    return {
+      kind,
+      id: object.id,
+      left: object.left,
+      top: object.top,
+      angle: object.angle || 0,
+      scaleX: object.scaleX || 1,
+      scaleY: object.scaleY || 1,
+      barcodeData: object.barcodeData,
+      barcodeFormat: object.barcodeFormat
+    }
+  }
+
+  if (kind === 'qrcode') {
+    return {
+      kind,
+      id: object.id,
+      left: object.left,
+      top: object.top,
+      angle: object.angle || 0,
+      scaleX: object.scaleX || 1,
+      scaleY: object.scaleY || 1,
+      qrData: object.qrData,
+      qrSize: object.qrSize,
+      qrType: object.qrType
+    }
+  }
+
+  return null
+}
+
+const serializeCanvasState = () => {
+  const sizePreset = paperSizePresets[paperSize.value]
+  const size = sizePreset
+    ? { width: sizePreset.mmWidth, height: sizePreset.mmHeight, unit: 'mm' }
+    : { width: canvasWidth.value, height: canvasHeight.value, unit: 'px' }
+
+  return {
+    paperSize: paperSize.value,
+    printOrientation: printOrientation.value,
+    canvasWidth: canvasWidth.value,
+    canvasHeight: canvasHeight.value,
+    backgroundColor: canvasBackground.value,
+    boundSku: boundProduct.value?.sku || null,
+    size,
+    objects: fabricCanvas.value
+      ? fabricCanvas.value.getObjects().map(serializeCanvasObject).filter(Boolean)
+      : []
+  }
+}
+
+const restoreCanvasObject = (definition) => {
+  switch (definition.kind) {
+    case 'text':
+      createTextElement(definition.left, definition.top, { ...definition, skipFocus: true })
+      break
+    case 'dynamic-field':
+      createDynamicFieldElement(definition.left, definition.top, definition.fieldType, { ...definition, skipFocus: true })
+      break
+    case 'rectangle':
+      createRectangleElement(definition.left, definition.top, { ...definition, skipFocus: true })
+      break
+    case 'circle':
+      createCircleElement(definition.left, definition.top, { ...definition, skipFocus: true })
+      break
+    case 'barcode':
+      createBarcodeElement(definition.left, definition.top, { ...definition, skipFocus: true })
+      break
+    case 'qrcode':
+      createQRCodeElement(definition.left, definition.top, { ...definition, skipFocus: true })
+      break
+    default:
+      break
+  }
+}
+
+const applyCanvasState = (canvasState) => {
+  if (!fabricCanvas.value) return
+
+  const savedSize = canvasState?.size || {}
+  const resolvedPaperSize = canvasState?.paperSize || findPaperSizePreset(savedSize.width, savedSize.height)
+
+  paperSize.value = resolvedPaperSize
+  printOrientation.value = canvasState?.printOrientation || 'portrait'
+  canvasWidth.value = Number(canvasState?.canvasWidth || (savedSize.unit === 'mm' ? Number(savedSize.width || 0) * 8 : savedSize.width) || canvasWidth.value)
+  canvasHeight.value = Number(canvasState?.canvasHeight || (savedSize.unit === 'mm' ? Number(savedSize.height || 0) * 8 : savedSize.height) || canvasHeight.value)
+  canvasBackground.value = canvasState?.backgroundColor || '#ffffff'
+
+  fabricCanvas.value.clear()
+  fabricCanvas.value.setDimensions({
+    width: canvasWidth.value,
+    height: canvasHeight.value
+  })
+  fabricCanvas.value.backgroundColor = canvasBackground.value
+  elementCounter.value = 0
+  selectedElement.value = null
+
+  ;(canvasState?.objects || []).forEach(restoreCanvasObject)
+
+  fabricCanvas.value.renderAll()
+  updateCanvasObjects()
+
+  pendingBoundSku.value = canvasState?.boundSku || ''
+  if (!pendingBoundSku.value) {
+    boundProduct.value = null
+  }
+  syncBoundProductFromPendingSku()
+}
+
+const persistTemplate = async () => {
+  if (!fabricCanvas.value) return
+
+  const currentTemplate = savedTemplates.value.find(template => template.id === activeTemplateId.value)
+  const suggestedName = currentTemplate?.name || `${templatePrintType.value} Template ${new Date().toLocaleDateString()}`
+  const nameInput = window.prompt('Template name', suggestedName)
+  if (nameInput === null) return false
+
+  const name = nameInput.trim()
+  if (!name) {
+    alert('Template name is required')
+    return false
+  }
+
+  const descriptionInput = window.prompt('Template description (optional)', currentTemplate?.description || '')
+  if (descriptionInput === null && currentTemplate) {
+    return false
+  }
+
+  const canvasState = serializeCanvasState()
+  const preview = fabricCanvas.value.toDataURL({
+    format: 'png',
+    quality: 0.9,
+    multiplier: 0.5
+  })
+
+  const payload = {
+    name,
+    description: descriptionInput || '',
+    templateType: selectedTemplate.value || printTypeTemplateMap[templatePrintType.value] || 'custom',
+    printTypes: [templatePrintType.value],
+    placeholders: ['{{sku}}', '{{name}}', '{{lot}}', '{{qty}}', '{{bin}}', '{{date}}', '{{qr}}'],
+    size: canvasState.size,
+    canvasState,
+    preview
+  }
+
+  const method = activeTemplateId.value ? 'PATCH' : 'POST'
+  const url = activeTemplateId.value
+    ? `/api/print-center/templates/${encodeURIComponent(activeTemplateId.value)}`
+    : '/api/print-center/templates'
+
+  const response = await fetch(url, {
+    method,
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload)
+  })
+  const result = await response.json()
+
+  if (!response.ok || !result.success) {
+    throw new Error(result.message || 'Failed to save template')
+  }
+
+  activeTemplateId.value = result.data.id
+  templatePrintType.value = result.data.printTypes?.[0] || templatePrintType.value
+  await loadSavedTemplates()
+
+  const refreshedTemplate = savedTemplates.value.find(template => template.id === result.data.id)
+  if (refreshedTemplate) {
+    applyTemplate(refreshedTemplate)
+  }
+
+  return true
+}
+
+const saveDesign = async () => {
+  try {
+    const saved = await persistTemplate()
+    if (saved) {
+      alert('Template saved successfully')
+    }
+  } catch (error) {
+    console.error('保存模板失败:', error)
+    alert(`Failed to save template: ${error.message}`)
+  }
 }
 
 const exportImage = () => {
@@ -1424,6 +1815,15 @@ const loadTemplateByType = (templateType) => {
   
   fabricCanvas.value.clear()
   selectedElement.value = null
+  activeTemplateId.value = ''
+  boundProduct.value = null
+  pendingBoundSku.value = ''
+  templatePrintType.value = {
+    product: 'ITEM',
+    warehouse: 'BIN',
+    shipping: 'LOT'
+  }[templateType] || 'ITEM'
+  fabricCanvas.value.backgroundColor = canvasBackground.value
   
   switch (templateType) {
     case 'product':
@@ -1460,16 +1860,11 @@ const createShippingTemplate = () => {
 
 // 新增方法
 const updatePaperSize = () => {
-  const sizes = {
-    '50x30': { width: 400, height: 240 },
-    '100x60': { width: 800, height: 480 },
-    '80x50': { width: 640, height: 400 },
-    '120x80': { width: 960, height: 640 }
-  }
+  const size = paperSizePresets[paperSize.value]
   
-  if (sizes[paperSize.value]) {
-    canvasWidth.value = sizes[paperSize.value].width
-    canvasHeight.value = sizes[paperSize.value].height
+  if (size) {
+    canvasWidth.value = size.width
+    canvasHeight.value = size.height
     resizeCanvas()
   }
 }
@@ -1487,24 +1882,70 @@ const previewMode = () => {
   console.log('预览模式')
 }
 
-const saveTemplate = () => {
-  // 实现保存模板
-  console.log('保存模板')
+const saveTemplate = async () => {
+  await saveDesign()
 }
 
-const loadTemplate = () => {
-  // 实现加载模板
-  console.log('加载模板')
+const loadTemplate = async () => {
+  await loadSavedTemplates()
+
+  const target = savedTemplates.value.find(template => template.id === activeTemplateId.value) || savedTemplates.value[0]
+  if (!target) {
+    alert('No saved templates available')
+    return
+  }
+
+  applyTemplate(target)
 }
 
 const applyTemplate = (template) => {
-  // 实现应用模板
-  console.log('应用模板:', template)
+  activeTemplateId.value = template.id
+  selectedTemplate.value = template.templateType || ''
+  templatePrintType.value = template.printTypes?.[0] || templatePrintType.value
+
+  if (template.canvasState) {
+    applyCanvasState(template.canvasState)
+    return
+  }
+
+  const preset = findPaperSizePreset(template.size?.width, template.size?.height)
+  paperSize.value = preset
+
+  if (preset === 'custom') {
+    canvasWidth.value = Number(template.size?.width || canvasWidth.value) * (template.size?.unit === 'mm' ? 8 : 1)
+    canvasHeight.value = Number(template.size?.height || canvasHeight.value) * (template.size?.unit === 'mm' ? 8 : 1)
+    resizeCanvas()
+  } else {
+    updatePaperSize()
+  }
+
+  fabricCanvas.value.clear()
+  fabricCanvas.value.backgroundColor = canvasBackground.value
+  fabricCanvas.value.renderAll()
+  updateCanvasObjects()
 }
 
-const handleBackgroundImage = () => {
-  // 实现背景图片处理
-  console.log('处理背景图片')
+const handleBackgroundImage = (event) => {
+  const file = event.target.files?.[0]
+  if (!file || !fabricCanvas.value) return
+
+  const reader = new FileReader()
+  reader.onload = () => {
+    fabric.Image.fromURL(reader.result, (image) => {
+      image.set({
+        left: 0,
+        top: 0,
+        selectable: false,
+        evented: false,
+        scaleX: canvasWidth.value / image.width,
+        scaleY: canvasHeight.value / image.height
+      })
+
+      fabricCanvas.value.backgroundImage = image
+      fabricCanvas.value.renderAll()
+    })
+  }
+  reader.readAsDataURL(file)
 }
 
 const setTextAlign = (align) => {
@@ -1955,6 +2396,11 @@ const getElementTypeName = (type) => {
   background: #f8f9ff;
 }
 
+.template-item.active {
+  border-color: #007AFF;
+  box-shadow: 0 0 0 1px rgba(0, 122, 255, 0.12);
+}
+
 .template-preview {
   width: 40px;
   height: 30px;
@@ -1967,6 +2413,17 @@ const getElementTypeName = (type) => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.template-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #1f2937;
+  background: linear-gradient(135deg, rgba(226, 232, 240, 0.9), rgba(255, 255, 255, 0.9));
 }
 
 .template-info {

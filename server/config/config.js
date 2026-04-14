@@ -1,5 +1,8 @@
 require('dotenv').config();
 
+const DEFAULT_JWT_SECRET = 'smart-label-local-dev-secret-change-me';
+const sharedJwtSecret = process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+
 module.exports = {
   database: {
     host: process.env.DB_HOST || '127.0.0.1',
@@ -10,8 +13,9 @@ module.exports = {
     dialect: process.env.DB_DIALECT || 'mysql'
   },
   jwt: {
-    secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-    expiresIn: '24h'
+    secret: sharedJwtSecret,
+    labelSecret: process.env.LABEL_JWT_SECRET || sharedJwtSecret,
+    expiresIn: process.env.JWT_EXPIRES_IN || '24h'
   },
   server: {
     port: process.env.PORT || 3000

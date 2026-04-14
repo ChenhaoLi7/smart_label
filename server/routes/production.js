@@ -1,6 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const authMiddleware = require('../middlewares/auth')
+const requireRole = require('../middlewares/requireRole')
 
 const {
     createBOM,
@@ -17,6 +18,7 @@ const {
 
 // Protect all routes
 router.use(authMiddleware)
+router.use(requireRole('admin'))
 
 // BOM Management
 router.post('/boms', createBOM)

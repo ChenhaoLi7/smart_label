@@ -5,17 +5,21 @@ module.exports = (req, res, next) => {
   try {
     // 从请求头获取token
     const token = req.headers.authorization?.split(' ')[1];
-    
+
     if (!token) {
       return res.status(401).json({ message: '未提供认证令牌' });
     }
 
     // 验证token
     const decoded = jwt.verify(token, config.jwt.secret);
-    
-    // 将用户信息添加到请求对象
-    req.user = decoded;
-    
+
+    // 标准化字段，兼容历史代码中 id/userId 两种写法
+    req.user = {
+      ...decoded,
+      userId: decoded.userId || decoded.id,
+      id: decoded.id || decoded.userId
+    };
+
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {

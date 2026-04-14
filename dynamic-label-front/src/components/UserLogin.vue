@@ -10,7 +10,7 @@
       <!-- 品牌标识 -->
       <div class="brand-section">
         <div class="logo-icon">📦</div>
-        <h1 class="brand-title">Smart Warehouse</h1>
+        <h1 class="brand-title">Pilot Inventory System</h1>
         <!-- <p class="brand-subtitle">Vision Pro Ready</p> -->
       </div>
 
@@ -62,19 +62,9 @@
       <div class="footer-links">
         <router-link to="/register" class="text-link">Create Account</router-link>
         <span class="divider">•</span>
-        <span class="text-link">Forgot Password</span>
+        <router-link to="/forgot-password" class="text-link">Forgot Password</router-link>
       </div>
 
-      <!-- 演示账户 (折叠式) -->
-      <div class="demo-trigger" @click="showDemo = !showDemo">
-        Demo Accounts {{ showDemo ? '▼' : '▶' }}
-      </div>
-      
-      <div class="demo-accounts" :class="{ 'visible': showDemo }">
-        <div class="demo-item"><span>Admin:</span> admin / admin123</div>
-        <div class="demo-item"><span>LI:</span> LI / 123456</div>
-        <div class="demo-item"><span>Test:</span> testuser / test123</div>
-      </div>
     </div>
     
     <!-- Theme Toggle -->
@@ -98,7 +88,6 @@ export default {
     const password = ref('')
     const error = ref('')
     const loading = ref(false)
-    const showDemo = ref(false)
     const router = useRouter()
     const isDark = ref(true)
 
@@ -152,6 +141,13 @@ export default {
       
       error.value = ''
       loading.value = true
+
+      // 清理旧登录态，避免旧管理员 token 造成错觉
+      localStorage.removeItem('token')
+      localStorage.removeItem('userRole')
+      localStorage.removeItem('username')
+      localStorage.removeItem('userEmail')
+      localStorage.removeItem('userAvatar')
       
       try {
         const res = await axios.post('/api/auth/login', {
@@ -162,14 +158,19 @@ export default {
         localStorage.setItem('token', res.data.data.token)
         localStorage.setItem('username', res.data.data.user.username)
         localStorage.setItem('userEmail', res.data.data.user.email)
+        localStorage.setItem('userRole', res.data.data.user.role || 'operator')
         localStorage.setItem('userAvatar', res.data.data.user.avatar || '')
         
+        const nextPath = '/dashboard'
+
         // 延迟跳转以展示动画
         setTimeout(() => {
-          router.push('/dashboard')
+          router.push(nextPath)
         }, 800)
         
       } catch (e) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('userRole')
         if (e.response?.status === 401) {
           error.value = 'Invalid credentials'
         } else if (e.response?.status === 404) {
@@ -189,7 +190,6 @@ export default {
       password,
       error,
       loading,
-      showDemo,
       handleLogin,
       isDark,
       toggleTheme
@@ -424,46 +424,6 @@ export default {
   text-align: center;
 }
 
-/* 演示账户 */
-.demo-trigger {
-  margin-top: 40px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  transition: color 0.2s;
-}
-
-.demo-trigger:hover {
-  color: var(--text-secondary);
-}
-
-.demo-accounts {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.3s ease;
-  background: var(--input-bg);
-  border-radius: 12px;
-  margin-top: 8px;
-}
-
-.demo-accounts.visible {
-  max-height: 120px;
-  padding: 12px;
-}
-
-.demo-item {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-  font-family: monospace;
-}
-
-.demo-item span {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
 /* 加载动画 */
 .spinner {
   display: inline-block;
@@ -487,7 +447,7 @@ export default {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.6); /* 移动端更深色背景以保证可读性 */
+    background: var(--glass-bg); /* 保持半透明以显示背景光效 */
   }
   
   .brand-title {

@@ -17,7 +17,8 @@ const httpsOptions =
 module.exports = defineConfig({
   transpileDependencies: true,
   devServer: {
-    host: process.env.DEV_HOST || '172.16.0.45',
+    host: process.env.DEV_HOST || '0.0.0.0',
+    allowedHosts: 'all',
     port: 8080,
     https: httpsOptions || undefined,
     proxy: {

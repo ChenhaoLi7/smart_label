@@ -9,9 +9,11 @@ const {
   getTransactionHistory
 } = require('../controllers/inventoryController')
 const authMiddleware = require('../middlewares/auth')
+const requireRole = require('../middlewares/requireRole')
 
 // 所有库存相关路由都需要认证
 router.use(authMiddleware)
+router.use(requireRole('admin'))
 
 // 库存查询
 router.get('/overview', getInventoryOverview)

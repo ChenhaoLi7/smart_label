@@ -10,9 +10,11 @@ const {
   executeReceiving
 } = require('../controllers/purchaseController')
 const authMiddleware = require('../middlewares/auth')
+const requireRole = require('../middlewares/requireRole')
 
 // 所有采购相关路由都需要认证
 router.use(authMiddleware)
+router.use(requireRole('admin'))
 
 // 采购订单管理
 router.post('/orders', createPurchaseOrder)

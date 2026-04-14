@@ -19,23 +19,25 @@
     <div class="scanner-area">
       <!-- 摄像头预览 -->
       <div v-if="currentMode === 'camera'" class="camera-container">
-        <video 
-          ref="videoRef" 
-          autoplay 
-          playsinline 
-          class="camera-video"
-          :class="{ scanning: isScanning }"
-        ></video>
-        
-        <!-- 扫描框 -->
-        <div class="scan-overlay">
-          <div class="scan-frame">
-            <div class="corner top-left"></div>
-            <div class="corner top-right"></div>
-            <div class="corner bottom-left"></div>
-            <div class="corner bottom-right"></div>
+        <div class="camera-stage">
+          <video 
+            ref="videoRef" 
+            autoplay 
+            playsinline 
+            class="camera-video"
+            :class="{ scanning: isScanning }"
+          ></video>
+          
+          <!-- 扫描框 -->
+          <div class="scan-overlay">
+            <div class="scan-frame">
+              <div class="corner top-left"></div>
+              <div class="corner top-right"></div>
+              <div class="corner bottom-left"></div>
+              <div class="corner bottom-right"></div>
+            </div>
+            <p class="scan-hint">Please place the barcode inside the frame</p>
           </div>
-          <p class="scan-hint">Please place the barcode inside the frame</p>
         </div>
 
         <!-- 摄像头控制 -->
@@ -51,6 +53,7 @@
             {{ flashOn ? 'Light Off' : 'Light On' }}
           </button>
         </div>
+
       </div>
 
       <!-- 文件上传 -->
@@ -90,25 +93,37 @@
           <span class="label">Raw Data:</span>
           <span class="value">{{ scanResult.raw }}</span>
         </div>
-        <div v-if="scanResult.parsed" class="result-item">
-          <span class="label">Parsed Result:</span>
-          <pre class="parsed-json">{{ JSON.stringify(scanResult.parsed, null, 2) }}</pre>
-        </div>
         <div class="result-item">
           <span class="label">Scan Time:</span>
           <span class="value">{{ scanResult.timestamp }}</span>
         </div>
       </div>
-      
+
       <!-- 业务操作按钮 -->
       <div class="business-actions">
-        <button @click="handleInbound" class="action-btn inbound">
+        <!-- 自动识别未入库商品时显示快速建档按钮 -->
+        <button v-if="isAdmin && scanAction === 'CREATE_ITEM'" @click="showCreateItemModal = true" class="action-btn" style="background: #10b981; color: white; border-color: #10b981;">
+          <span class="icon">➕</span>
+          Fast Item Creation
+        </button>
+
+        <button v-if="isAdmin" @click="handleInbound" class="action-btn inbound">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="7 10 12 15 17 10"/>
             <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
           Inbound Processing
+        </button>
+        <button v-if="isAdmin" @click="handleMove" class="action-btn" style="background: #0f172a; color: white;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 3h5v5"/>
+            <path d="M4 20L21 3"/>
+            <path d="M8 21H3v-5"/>
+            <path d="M15 15l6 6"/>
+            <path d="M3 3l6 6"/>
+          </svg>
+          Move Bin
         </button>
         <button @click="handleOutbound" class="action-btn outbound">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -117,27 +132,6 @@
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
           Outbound Processing
-        </button>
-        <button @click="handleInventory" class="action-btn inventory">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-            <polyline points="3.27,6.96 12,12.01 20.73,6.96"/>
-            <line x1="12" y1="22.08" x2="12" y2="12"/>
-          </svg>
-          Inventory Inquiry
-        </button>
-        <button @click="handleProduction" class="action-btn production" style="background: #8b5cf6; color: white;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-          </svg>
-          Production
-        </button>
-        <button @click="handleCount" class="action-btn count" style="background: #eab308; color: white;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M9 11l3 3L22 4"/>
-            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-          </svg>
-          Count
         </button>
         <button @click="clearResult" class="action-btn clear">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -149,55 +143,318 @@
       </div>
     </div>
 
-    <!-- 状态提示 -->
-    <div v-if="statusMessage" class="status-message" :class="statusType">
-      {{ statusMessage }}
-    </div>
-    
-    <!-- 低光环境提示 -->
-    <div v-if="isLowLight && !flashOn && hasFlash" class="low-light-hint">
-      <div class="hint-content">
-        <span class="hint-icon">🌙</span>
-        <span>Low light detected. Turning on the light will improve scan accuracy</span>
-        <button @click="toggleFlash" class="hint-btn">Turn On Light</button>
+    <div v-if="actionFeedbackModal.visible" class="modal-overlay modal-overlay-foreground" @click="closeActionFeedbackModal">
+      <div class="modal-content action-feedback-modal" @click.stop>
+        <div class="action-feedback-icon">✓</div>
+        <h3>{{ actionFeedbackModal.title }}</h3>
+        <p>{{ actionFeedbackModal.message }}</p>
+        <button @click="closeActionFeedbackModal" class="btn-primary action-feedback-btn">Done</button>
       </div>
     </div>
 
-    <!-- 队列状态可视化 (新增) -->
-    <div v-if="requestQueue.length > 0" class="queue-status">
-      <h3>Background Tasks ({{ requestQueue.length }})</h3>
-      <div v-for="task in requestQueue" :key="task.id" class="queue-item" :class="task.status">
-        <div class="task-info">
-          <span class="task-desc">{{ task.desc }}</span>
-          <span class="task-time">{{ task.timestamp }}</span>
-        </div>
-        <div class="task-status">
-          <span v-if="task.status === 'pending'">⏳ Pending</span>
-          <span v-if="task.status === 'sending'">🔄 Sending...</span>
-          <span v-if="task.status === 'retrying'">⚠️ Retry ({{ task.retryCount }})</span>
-          <span v-if="task.status === 'success'">✅ Done</span>
-        </div>
+    <!-- 状态提示 -->
+    <div v-if="operationNotice.visible" class="operation-toast" :class="operationNotice.type">
+      <div class="operation-toast-icon">{{ operationNotice.type === 'success' ? '✓' : '!' }}</div>
+      <div class="operation-toast-copy">
+        <strong>{{ operationNotice.title }}</strong>
+        <p>{{ operationNotice.message }}</p>
       </div>
+    </div>
+
+    <div v-if="statusMessage" class="status-message" :class="statusType">
+      {{ statusMessage }}
     </div>
 
     <!-- 设备选择 -->
     <div v-if="devices.length > 1" class="device-selector">
       <label>Select Camera:</label>
       <select v-model="selectedDevice" @change="switchDevice">
-        <option v-for="device in devices" :key="device.deviceId" :value="device.deviceId">
-          {{ device.label || `Camera ${device.deviceId.slice(0, 8)}` }}
+        <option v-for="(device, index) in devices" :key="device.deviceId" :value="device.deviceId">
+          {{ formatCameraLabel(device, index) }}
         </option>
       </select>
+    </div>
+
+    <!-- 快速建档弹窗 -->
+    <div v-if="showCreateItemModal" class="modal-overlay" @click="showCreateItemModal = false">
+      <div class="modal-content glass-panel" @click.stop>
+        <div class="modal-header">
+          <h3>Create New Item</h3>
+          <button @click="showCreateItemModal = false" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body form-body">
+          <div class="form-group">
+            <label>SKU (Barcode)</label>
+            <input type="text" v-model="newItemForm.sku" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Item Name</label>
+            <input type="text" v-model="newItemForm.name" placeholder="Enter item name..." class="input-field" required>
+          </div>
+          <div class="form-group">
+            <label>Category</label>
+            <input type="text" v-model="newItemForm.category" placeholder="e.g. Beverages" class="input-field">
+          </div>
+          <div class="form-group">
+            <label>Brand</label>
+            <input type="text" v-model="newItemForm.brand" placeholder="e.g. Coca-Cola" class="input-field">
+          </div>
+          <div class="form-group">
+            <label>Price</label>
+            <input type="number" v-model="newItemForm.price" min="0" step="0.01" placeholder="Optional" class="input-field">
+          </div>
+          <div class="form-actions">
+            <button @click="showCreateItemModal = false" class="btn-cancel">Cancel</button>
+            <button @click="submitNewItem" class="btn-primary" :disabled="isSubmittingItem">
+              {{ isSubmittingItem ? 'Saving...' : 'Save Item' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 入库弹窗 -->
+    <div v-if="showInboundModal" class="modal-overlay" @click="showInboundModal = false">
+      <div class="modal-content glass-panel" @click.stop>
+        <div class="modal-header">
+          <h3>📦 Inbound Processing</h3>
+          <button @click="showInboundModal = false" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body form-body">
+          <div class="form-group">
+            <label>SKU (Barcode)</label>
+            <input type="text" v-model="inboundForm.sku" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Item Name</label>
+            <input type="text" v-model="inboundForm.item_name" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Lot Number</label>
+            <input type="text" v-model="inboundForm.lot_number" class="input-field" placeholder="e.g. LOT-20260401-1234">
+          </div>
+          <div class="form-group">
+            <label>Quantity ✳️</label>
+            <input type="number" v-model="inboundForm.qty" min="1" class="input-field" placeholder="How many?">
+          </div>
+          <div class="form-group">
+            <label>Expiry Date</label>
+            <input type="date" v-model="inboundForm.expiry_date" class="input-field">
+            <p class="form-hint">Optional. Set this when the batch has a real expiry date.</p>
+          </div>
+          <div class="form-group">
+            <label>Location (Bin)</label>
+            <select
+              v-if="availableBins.length"
+              v-model="inboundBinSelection"
+              @change="syncInboundBinSelection"
+              class="input-field"
+            >
+              <option v-for="bin in availableBins" :key="`inbound-${bin.bin_code}`" :value="bin.bin_code">
+                {{ formatBinOptionLabel(bin) }}
+              </option>
+              <option :value="CUSTOM_BIN_OPTION">Custom / New Bin...</option>
+            </select>
+            <input
+              v-if="!availableBins.length || inboundBinSelection === CUSTOM_BIN_OPTION"
+              type="text"
+              v-model="inboundForm.bin_code"
+              class="input-field"
+              placeholder="e.g. Refrigerator"
+            >
+            <p class="form-hint">
+              Select an existing bin to avoid typos. Use Custom / New Bin only when creating a new location.
+            </p>
+            <p v-if="binLoadingError" class="form-hint form-hint-error">{{ binLoadingError }}</p>
+          </div>
+          <div class="form-actions">
+            <button @click="showInboundModal = false" class="btn-cancel">Cancel</button>
+            <button @click="submitInbound" class="btn-primary" :disabled="isSubmittingInbound">
+              {{ isSubmittingInbound ? 'Saving...' : '✓ Confirm Inbound' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 移库弹窗 -->
+    <div v-if="showMoveModal" class="modal-overlay" @click="showMoveModal = false">
+      <div class="modal-content glass-panel" @click.stop>
+        <div class="modal-header">
+          <h3>↔ Move Inventory</h3>
+          <button @click="showMoveModal = false" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body form-body">
+          <div class="form-group">
+            <label>Lot Number</label>
+            <input type="text" v-model="moveForm.lot_number" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>SKU</label>
+            <input type="text" v-model="moveForm.sku" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Current Bin</label>
+            <input type="text" v-model="moveForm.from_bin_code" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Available Qty</label>
+            <input type="number" :value="moveForm.available_qty" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Move Qty ✳️</label>
+            <input type="number" v-model="moveForm.qty" min="1" :max="moveForm.available_qty || 1" class="input-field" placeholder="Leave the full quantity to move the entire lot">
+            <p class="form-hint">If the quantity is smaller than the full lot, the system will split off a new destination lot automatically.</p>
+          </div>
+          <div class="form-group">
+            <label>Target Bin ✳️</label>
+            <select
+              v-if="availableBins.length"
+              v-model="moveBinSelection"
+              @change="syncMoveBinSelection"
+              class="input-field"
+            >
+              <option
+                v-for="bin in moveTargetBins"
+                :key="`move-${bin.bin_code}`"
+                :value="bin.bin_code"
+              >
+                {{ formatBinOptionLabel(bin) }}
+              </option>
+              <option :value="CUSTOM_BIN_OPTION">Custom / New Bin...</option>
+            </select>
+            <input
+              v-if="!availableBins.length || moveBinSelection === CUSTOM_BIN_OPTION"
+              type="text"
+              v-model="moveForm.to_bin_code"
+              class="input-field"
+              placeholder="e.g. Refrigerator"
+            >
+            <p class="form-hint">
+              Pick the destination bin from the list whenever possible to reduce location mistakes.
+            </p>
+            <p v-if="binLoadingError" class="form-hint form-hint-error">{{ binLoadingError }}</p>
+          </div>
+          <div class="form-group">
+            <label>Note</label>
+            <input type="text" v-model="moveForm.notes" class="input-field" placeholder="Optional note for this move">
+          </div>
+          <div class="form-actions">
+            <button @click="showMoveModal = false" class="btn-cancel">Cancel</button>
+            <button @click="submitMove" class="btn-primary" :disabled="isSubmittingMove">
+              {{ isSubmittingMove ? 'Moving...' : '✓ Confirm Move' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 出库弹窗 -->
+    <div v-if="showOutboundModal" class="modal-overlay" @click="showOutboundModal = false">
+      <div class="modal-content glass-panel" @click.stop>
+        <div class="modal-header">
+          <h3>📤 Outbound Processing</h3>
+          <button @click="showOutboundModal = false" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body form-body">
+          <div class="form-group">
+            <label>SKU</label>
+            <input type="text" v-model="outboundForm.sku" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Item Name</label>
+            <input type="text" v-model="outboundForm.item_name" disabled class="input-field disabled-input">
+          </div>
+          <div v-if="outboundWorkflowGuide.length" class="form-group">
+            <label>Workflow Guide</label>
+            <div class="workflow-guide-compact">
+              <div v-for="tip in outboundWorkflowGuide" :key="`modal-${tip}`" class="workflow-guide-compact-item">
+                {{ tip }}
+              </div>
+            </div>
+          </div>
+          <div v-if="isOutboundFifoMode" class="form-group">
+            <label>Deduction Strategy</label>
+            <input type="text" value="FIFO · oldest lot first" disabled class="input-field disabled-input">
+            <p class="form-hint">Scanning an item label will now deduct from the oldest active lot first, then continue forward only if more stock is needed.</p>
+          </div>
+          <div v-if="isOutboundFifoMode" class="form-group">
+            <label>FIFO Plan</label>
+            <div class="outbound-plan-list">
+              <div
+                v-for="(candidate, index) in outboundCandidates"
+                :key="candidate.key"
+                class="outbound-plan-card"
+              >
+                <div class="outbound-plan-step">Step {{ index + 1 }}</div>
+                <div class="outbound-plan-main">{{ candidate.lot_number }}</div>
+                <div class="outbound-plan-meta">
+                  <span>{{ candidate.bin_code }}</span>
+                  <span>{{ candidate.available_qty }} {{ candidate.uom }}</span>
+                  <span v-if="candidate.expiry_date">Exp {{ formatDate(candidate.expiry_date) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="outboundCandidates.length > 1" class="form-group">
+            <label>Source Lot / Bin ✳️</label>
+            <select v-model="selectedOutboundLotKey" @change="syncOutboundCandidate" class="input-field">
+              <option
+                v-for="candidate in outboundCandidates"
+                :key="candidate.key"
+                :value="candidate.key"
+              >
+                {{ formatOutboundCandidateLabel(candidate) }}
+              </option>
+            </select>
+            <p class="form-hint">This item exists in multiple bins, so please choose the exact source location to deduct from.</p>
+          </div>
+          <div class="form-group">
+            <label>{{ isOutboundFifoMode ? 'Lot Sequence' : 'Lot Number' }}</label>
+            <input type="text" v-model="outboundForm.lot_number" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>{{ isOutboundFifoMode ? 'Source Bins' : 'Source Bin' }}</label>
+            <input type="text" v-model="outboundForm.source_bin_code" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Available Qty</label>
+            <input type="number" :value="outboundForm.available_qty" disabled class="input-field disabled-input">
+          </div>
+          <div class="form-group">
+            <label>Outbound Qty ✳️</label>
+            <input type="number" v-model="outboundForm.qty" min="1" :max="outboundForm.available_qty || 1" class="input-field" placeholder="How many will be deducted?">
+          </div>
+          <div class="form-actions">
+            <button @click="showOutboundModal = false" class="btn-cancel">Cancel</button>
+            <button @click="submitOutbound" class="btn-primary" :disabled="isSubmittingOutbound">
+              {{ isSubmittingOutbound ? 'Saving...' : '✓ Confirm Outbound' }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-
-
-import { BrowserMultiFormatReader } from '@zxing/browser'
+import { computed, ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import {
+  buildPreferredVideoConstraints,
+  createEnhancedCodeReader
+} from '@/utils/enhancedScanner'
 // import QRCode from 'qrcode' // 暂时注释，后续会用到
+
+const router = useRouter()
+
+const isHandheldClient = () => {
+  const ua = window.navigator.userAgent || window.navigator.vendor || ''
+  const isMobileUa = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)
+  const isTouchMac = /Macintosh/i.test(ua) && window.navigator.maxTouchPoints > 1
+
+  return isMobileUa || isTouchMac
+}
 
 // 响应式数据
 const videoRef = ref(null)
@@ -205,6 +462,7 @@ const fileInput = ref(null)
 const isScanning = ref(false)
 const currentMode = ref('camera')
 const scanResult = ref(null)
+const scanAction = ref(null) // 保存后端的 action 标识
 const statusMessage = ref('')
 const statusType = ref('info')
 const manualCode = ref('')
@@ -212,8 +470,86 @@ const devices = ref([])
 const selectedDevice = ref('')
 const hasFlash = ref(false)
 const flashOn = ref(false)
-const isLowLight = ref(false) // 低光环境检测
-let lightCheckInterval = null
+const scanCanvasCache = {}
+const userRole = ref(localStorage.getItem('userRole') || 'operator')
+const isAdmin = userRole.value === 'admin'
+const SCAN_COOLDOWN_MS = 1200
+const isHandlingScan = ref(false)
+const lastProcessedScan = ref('')
+const lastProcessedAt = ref(0)
+const operationNotice = ref({
+  visible: false,
+  type: 'success',
+  title: '',
+  message: ''
+})
+let operationNoticeTimer = null
+const actionFeedbackModal = ref({
+  visible: false,
+  title: '',
+  message: ''
+})
+let sharedAudioContext = null
+let removeAudioPrimeListeners = null
+
+// 新建商品相关状态
+const showCreateItemModal = ref(false)
+const isSubmittingItem = ref(false)
+const newItemForm = ref({
+  sku: '',
+  name: '',
+  category: '',
+  brand: '',
+  price: ''
+})
+
+// 入库弹窗相关状态
+const showInboundModal = ref(false)
+const isSubmittingInbound = ref(false)
+const inboundForm = ref({
+  sku: '',
+  item_name: '',
+  lot_number: '',
+  qty: 1,
+  bin_code: 'Refrigerator',
+  expiry_date: ''
+})
+const CUSTOM_BIN_OPTION = '__custom__'
+const availableBins = ref([])
+const isLoadingBins = ref(false)
+const binLoadingError = ref('')
+const inboundBinSelection = ref(CUSTOM_BIN_OPTION)
+
+// 移库弹窗相关状态
+const showMoveModal = ref(false)
+const isSubmittingMove = ref(false)
+const moveForm = ref({
+  lot_number: '',
+  sku: '',
+  item_name: '',
+  from_bin_code: '',
+  available_qty: 0,
+  qty: 1,
+  to_bin_code: 'Refrigerator',
+  notes: ''
+})
+const moveBinSelection = ref(CUSTOM_BIN_OPTION)
+
+// 出库弹窗相关状态
+const showOutboundModal = ref(false)
+const isSubmittingOutbound = ref(false)
+const outboundCandidates = ref([])
+const selectedOutboundLotKey = ref('')
+const outboundStrategy = ref('DIRECT')
+const outboundForm = ref({
+  sku: '',
+  item_name: '',
+  lot_number: '',
+  source_bin_code: '',
+  available_qty: 0,
+  qty: 1,
+  uom: 'pcs'
+})
 
 // 🔑 幂等性与离线队列
 // 1. 从 LocalStorage 初始化队列 (Persistence)
@@ -296,14 +632,534 @@ const scanModes = [
   { value: 'manual', label: '⌨️ Manual Input', icon: '⌨️' }
 ]
 
+const canUseVibrationFeedback = () => {
+  const ua = window.navigator.userAgent || ''
+  const isIOS = /iPhone|iPad|iPod/i.test(ua)
+
+  return typeof navigator.vibrate === 'function' && !isIOS
+}
+
+const getSharedAudioContext = () => {
+  const AudioCtor = window.AudioContext || window.webkitAudioContext
+  if (!AudioCtor) return null
+
+  if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+    sharedAudioContext = new AudioCtor()
+  }
+
+  return sharedAudioContext
+}
+
+const primeAudioFeedback = async () => {
+  const audioContext = getSharedAudioContext()
+  if (!audioContext) return null
+
+  if (audioContext.state === 'suspended') {
+    try {
+      await audioContext.resume()
+    } catch (error) {
+      console.warn('Failed to resume audio context:', error)
+    }
+  }
+
+  return audioContext
+}
+
+const playTonePattern = async (tones, { volume = 0.22, waveform = 'sine' } = {}) => {
+  const audioContext = await primeAudioFeedback()
+  if (!audioContext) return
+
+  const gainNode = audioContext.createGain()
+  gainNode.connect(audioContext.destination)
+  gainNode.gain.setValueAtTime(0.0001, audioContext.currentTime)
+
+  tones.forEach((tone) => {
+    const oscillator = audioContext.createOscillator()
+    oscillator.type = waveform
+    oscillator.frequency.setValueAtTime(tone.frequency, audioContext.currentTime + tone.start)
+    oscillator.connect(gainNode)
+
+    gainNode.gain.exponentialRampToValueAtTime(volume, audioContext.currentTime + tone.start + 0.012)
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + tone.start + tone.duration)
+
+    oscillator.start(audioContext.currentTime + tone.start)
+    oscillator.stop(audioContext.currentTime + tone.start + tone.duration)
+  })
+}
+
+const bindAudioPrimeListeners = () => {
+  const primeFromGesture = () => {
+    void primeAudioFeedback()
+    if (typeof removeAudioPrimeListeners === 'function') {
+      removeAudioPrimeListeners()
+      removeAudioPrimeListeners = null
+    }
+  }
+
+  window.addEventListener('pointerdown', primeFromGesture, { passive: true })
+  window.addEventListener('keydown', primeFromGesture, { passive: true })
+
+  removeAudioPrimeListeners = () => {
+    window.removeEventListener('pointerdown', primeFromGesture)
+    window.removeEventListener('keydown', primeFromGesture)
+  }
+}
+
+const shouldSkipDuplicateScan = (rawData, bypassCooldown = false) => {
+  if (bypassCooldown) return false
+
+  const now = Date.now()
+  return rawData === lastProcessedScan.value && now - lastProcessedAt.value < SCAN_COOLDOWN_MS
+}
+
+const triggerScanFeedback = () => {
+  if (canUseVibrationFeedback()) {
+    navigator.vibrate(200)
+  }
+
+  playScanSound()
+}
+
+const showOperationNotice = (title, message, type = 'success') => {
+  if (operationNoticeTimer) {
+    clearTimeout(operationNoticeTimer)
+  }
+
+  operationNotice.value = {
+    visible: true,
+    type,
+    title,
+    message
+  }
+
+  operationNoticeTimer = setTimeout(() => {
+    operationNotice.value.visible = false
+  }, 3200)
+}
+
+const showActionFeedbackModal = (title, message) => {
+  actionFeedbackModal.value = {
+    visible: true,
+    title,
+    message
+  }
+
+  playActionSuccessSound()
+}
+
+const closeActionFeedbackModal = () => {
+  actionFeedbackModal.value.visible = false
+}
+
+const moveTargetBins = computed(() => {
+  const currentBinCode = String(moveForm.value.from_bin_code || '').trim()
+  return availableBins.value.filter((bin) => bin.bin_code !== currentBinCode)
+})
+const isOutboundFifoMode = computed(() => outboundStrategy.value === 'FIFO')
+const totalOutboundAvailableQty = computed(() => (
+  outboundCandidates.value.reduce((sum, candidate) => sum + Number(candidate.available_qty || 0), 0)
+))
+const outboundWorkflowGuide = computed(() => {
+  const parsed = scanResult.value?.parsed
+  if (!parsed) return []
+
+  if (parsed?.lot) {
+    const expiry = parsed.lot?.expiry_date ? `Expiry: ${formatDate(parsed.lot.expiry_date)}.` : 'No expiry date on this lot yet.'
+    return [
+      'This is a lot label. Outbound will deduct this exact batch only.',
+      `${expiry} Use this path when you need exact batch control or FEFO review.`
+    ]
+  }
+
+  if (parsed?.item) {
+    const activeLots = (parsed.item.lots || []).filter((lot) => Number(lot.qty || 0) > 0)
+    const lotsWithExpiry = activeLots.filter((lot) => lot.expiry_date)
+
+    if (activeLots.length > 1) {
+      return [
+        'Scanning an item label uses FIFO automatic deduction across the oldest active lots.',
+        lotsWithExpiry.length
+          ? 'Expiry dates are available on some lots. If expiry matters more than FIFO, scan the lot label you want before confirming outbound.'
+          : 'If you need an exact batch or location instead of FIFO, scan the lot label directly.'
+      ]
+    }
+
+    return [
+      'This item currently has one active lot, so item outbound is straightforward.',
+      'If you later split stock across bins or batches, scanning the item will switch back to guided FIFO mode.'
+    ]
+  }
+
+  if (parsed?.bin) {
+    return [
+      'This is a bin label. Scan an item or lot next if you want to perform outbound from stock.',
+      'Bin scans are best used for inquiry, cycle counts, and location-aware workflows.'
+    ]
+  }
+
+  return []
+})
+
+const formatBinOptionLabel = (bin) => {
+  const parts = [bin.bin_code]
+
+  if (bin.zone) parts.push(formatZoneLabel(bin.zone))
+  if (bin.temperature_zone) parts.push(bin.temperature_zone)
+
+  return parts.join(' · ')
+}
+
+const formatZoneLabel = (zone) => {
+  const normalizedZone = String(zone || '').trim()
+
+  if (normalizedZone === 'A区') return 'Zone A'
+  if (normalizedZone === 'B区') return 'Zone B'
+  if (normalizedZone === 'C区') return 'Zone C'
+
+  return normalizedZone
+}
+
+const formatDate = (value) => {
+  if (!value) return '-'
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return String(value)
+  }
+
+  return parsed.toLocaleDateString()
+}
+
+const formatCameraLabel = (device, index) => {
+  const rawLabel = String(device?.label || '').trim()
+  const lowerLabel = rawLabel.toLowerCase()
+
+  if (
+    lowerLabel.includes('back') ||
+    lowerLabel.includes('rear') ||
+    lowerLabel.includes('environment') ||
+    rawLabel.includes('后') ||
+    rawLabel.includes('後')
+  ) {
+    return 'Rear Camera'
+  }
+
+  if (
+    lowerLabel.includes('front') ||
+    lowerLabel.includes('user') ||
+    rawLabel.includes('前')
+  ) {
+    return 'Front Camera'
+  }
+
+  return `Camera ${index + 1}`
+}
+
+const findMatchingBinCode = (binCode, bins = availableBins.value) => {
+  const normalized = String(binCode || '').trim()
+  return bins.find((bin) => bin.bin_code === normalized)?.bin_code || ''
+}
+
+const syncInboundBinSelection = () => {
+  if (inboundBinSelection.value !== CUSTOM_BIN_OPTION) {
+    inboundForm.value.bin_code = inboundBinSelection.value
+  }
+}
+
+const syncMoveBinSelection = () => {
+  if (moveBinSelection.value !== CUSTOM_BIN_OPTION) {
+    moveForm.value.to_bin_code = moveBinSelection.value
+  }
+}
+
+const getCodeReader = () => {
+  if (!codeReader) {
+    codeReader = createEnhancedCodeReader()
+  }
+
+  return codeReader
+}
+
+const ensureBinsLoaded = async ({ force = false } = {}) => {
+  if (!isAdmin) return
+  if (isLoadingBins.value) return
+  if (availableBins.value.length > 0 && !force) return
+
+  isLoadingBins.value = true
+  binLoadingError.value = ''
+
+  try {
+    const response = await fetch('/api/inventory-management/bins?limit=200&sortBy=bin_code', {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    })
+
+    const result = await response.json()
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Failed to load bins')
+    }
+
+    availableBins.value = result.data?.bins || []
+  } catch (error) {
+    console.error('加载库位列表失败:', error)
+    binLoadingError.value = 'Bin list could not be loaded. You can still type a new bin manually.'
+  } finally {
+    isLoadingBins.value = false
+  }
+}
+
+const prepareInboundBinPicker = () => {
+  const currentBinCode = String(inboundForm.value.bin_code || '').trim()
+  const matchedCode = findMatchingBinCode(currentBinCode)
+
+  if (matchedCode) {
+    inboundBinSelection.value = matchedCode
+    inboundForm.value.bin_code = matchedCode
+    return
+  }
+
+  inboundBinSelection.value = CUSTOM_BIN_OPTION
+}
+
+const prepareMoveBinPicker = () => {
+  const currentTarget = String(moveForm.value.to_bin_code || '').trim()
+  const currentSource = String(moveForm.value.from_bin_code || '').trim()
+  const matchedCode = findMatchingBinCode(currentTarget, moveTargetBins.value)
+
+  if (matchedCode) {
+    moveBinSelection.value = matchedCode
+    moveForm.value.to_bin_code = matchedCode
+    return
+  }
+
+  const refrigerator = moveTargetBins.value.find((bin) => bin.bin_code === 'Refrigerator')
+  if (refrigerator) {
+    moveBinSelection.value = refrigerator.bin_code
+    moveForm.value.to_bin_code = refrigerator.bin_code
+    return
+  }
+
+  const firstDifferentBin = moveTargetBins.value.find((bin) => bin.bin_code !== currentSource)
+  if (firstDifferentBin) {
+    moveBinSelection.value = firstDifferentBin.bin_code
+    moveForm.value.to_bin_code = firstDifferentBin.bin_code
+    return
+  }
+
+  moveBinSelection.value = CUSTOM_BIN_OPTION
+}
+
+const buildOutboundCandidate = (lot, fallbackItemName = '') => {
+  const lotNumber = String(lot?.lot_number || lot?.id || '').trim()
+  const sku = String(lot?.sku || '').trim()
+  const itemName = String(lot?.item?.name || fallbackItemName || sku).trim()
+  const binCode = String(lot?.bin?.bin_code || lot?.bin_code || 'Unassigned').trim() || 'Unassigned'
+  const availableQty = Number(lot?.qty || 0)
+  const uom = String(lot?.uom || lot?.item?.uom || 'pcs').trim() || 'pcs'
+
+  return {
+    key: `${lotNumber}::${binCode}`,
+    lot_number: lotNumber,
+    sku,
+    item_name: itemName,
+    bin_code: binCode,
+    available_qty: availableQty,
+    uom,
+    expiry_date: lot?.expiry_date || null,
+    created_at: lot?.createdAt || lot?.created_at || null
+  }
+}
+
+const formatOutboundCandidateLabel = (candidate) => {
+  return `${candidate.bin_code} · ${candidate.lot_number} · ${candidate.available_qty} ${candidate.uom}`
+}
+
+const getOutboundCandidateTimestamp = (candidate) => {
+  const rawValue = candidate?.created_at
+  const timestamp = rawValue ? new Date(rawValue).getTime() : Number.NaN
+  return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER
+}
+
+const sortOutboundCandidatesForFifo = (candidates) => {
+  return [...candidates].sort((left, right) => {
+    const timeDelta = getOutboundCandidateTimestamp(left) - getOutboundCandidateTimestamp(right)
+    if (timeDelta !== 0) return timeDelta
+
+    return String(left.lot_number || '').localeCompare(String(right.lot_number || ''))
+  })
+}
+
+const syncOutboundCandidate = () => {
+  if (isOutboundFifoMode.value) {
+    const firstCandidate = outboundCandidates.value[0]
+    const totalAvailable = totalOutboundAvailableQty.value
+    const boundedQty = Math.min(
+      Math.max(Number(outboundForm.value.qty || 1), 1),
+      Math.max(totalAvailable, 1)
+    )
+
+    outboundForm.value = {
+      sku: firstCandidate?.sku || outboundForm.value.sku || '',
+      item_name: firstCandidate?.item_name || outboundForm.value.item_name || '',
+      lot_number: outboundCandidates.value.length === 1
+        ? firstCandidate?.lot_number || ''
+        : `${outboundCandidates.value.length} FIFO lots`,
+      source_bin_code: outboundCandidates.value.length === 1
+        ? firstCandidate?.bin_code || '-'
+        : 'Automatic across oldest active lots',
+      available_qty: totalAvailable,
+      qty: boundedQty,
+      uom: firstCandidate?.uom || outboundForm.value.uom || 'pcs'
+    }
+    return
+  }
+
+  const selectedCandidate =
+    outboundCandidates.value.find((candidate) => candidate.key === selectedOutboundLotKey.value) ||
+    outboundCandidates.value[0]
+
+  if (!selectedCandidate) return
+
+  selectedOutboundLotKey.value = selectedCandidate.key
+  outboundForm.value = {
+    sku: selectedCandidate.sku,
+    item_name: selectedCandidate.item_name,
+    lot_number: selectedCandidate.lot_number,
+    source_bin_code: selectedCandidate.bin_code,
+    available_qty: selectedCandidate.available_qty,
+    qty: Math.min(Math.max(Number(outboundForm.value.qty || 1), 1), Math.max(selectedCandidate.available_qty, 1)),
+    uom: selectedCandidate.uom
+  }
+}
+
+const resolveOutboundCandidates = () => {
+  const parsed = scanResult.value?.parsed
+
+  if (parsed?.lot) {
+    const candidate = buildOutboundCandidate(parsed.lot, parsed.lot.item?.name || parsed.lot.sku)
+
+    if (!candidate.lot_number || !candidate.sku) {
+      return { error: 'This lot label is missing lot or SKU details, so outbound cannot continue yet.' }
+    }
+
+    if (candidate.available_qty <= 0) {
+      return { error: 'This lot has no stock left for outbound.' }
+    }
+
+    return { candidates: [candidate], strategy: 'DIRECT' }
+  }
+
+  if (parsed?.item) {
+    const itemName = parsed.item.name || parsed.item.sku || ''
+    const candidates = sortOutboundCandidatesForFifo((parsed.item.lots || [])
+      .map((lot) => buildOutboundCandidate(lot, itemName))
+      .filter((candidate) => candidate.lot_number && candidate.sku && candidate.available_qty > 0))
+
+    if (!candidates.length) {
+      return { error: 'This item has no available stock for outbound.' }
+    }
+
+    return { candidates, strategy: 'FIFO' }
+  }
+
+  return { error: 'Please scan an item label or a lot label before outbound.' }
+}
+
+const ensureScanCanvas = (key, width, height) => {
+  if (!scanCanvasCache[key]) {
+    scanCanvasCache[key] = document.createElement('canvas')
+  }
+
+  const canvas = scanCanvasCache[key]
+  if (canvas.width !== width) canvas.width = width
+  if (canvas.height !== height) canvas.height = height
+  return canvas
+}
+
+const tryDecodeCanvas = (canvas) => {
+  try {
+    const result = getCodeReader().decodeFromCanvas(canvas)
+    if (!result?.getText?.()) return ''
+    return String(result.getText()).trim()
+  } catch (error) {
+    return ''
+  }
+}
+
+const decodeCurrentVideoFrame = (video) => {
+  const videoWidth = video.videoWidth || 0
+  const videoHeight = video.videoHeight || 0
+  if (!videoWidth || !videoHeight) return ''
+
+  const roiWidth = Math.min(videoWidth * 0.82, videoWidth)
+  const roiHeight = Math.min(videoHeight * 0.5, videoHeight)
+  const roiX = Math.max((videoWidth - roiWidth) / 2, 0)
+  const roiY = Math.max((videoHeight - roiHeight) / 2, 0)
+
+  const roiCanvas = ensureScanCanvas('roiCanvas', Math.round(roiWidth), Math.round(roiHeight))
+  const roiCtx = roiCanvas.getContext('2d', { willReadFrequently: true })
+  roiCtx.drawImage(video, roiX, roiY, roiWidth, roiHeight, 0, 0, roiCanvas.width, roiCanvas.height)
+
+  const roiResult = tryDecodeCanvas(roiCanvas)
+  if (roiResult) return roiResult
+
+  const fullWidth = Math.min(videoWidth, 1280)
+  const fullHeight = Math.min(videoHeight, 720)
+  const fullCanvas = ensureScanCanvas('fullCanvas', Math.round(fullWidth), Math.round(fullHeight))
+  const fullCtx = fullCanvas.getContext('2d', { willReadFrequently: true })
+  fullCtx.drawImage(video, 0, 0, videoWidth, videoHeight, 0, 0, fullCanvas.width, fullCanvas.height)
+
+  return tryDecodeCanvas(fullCanvas)
+}
+
+const stopScanLoop = () => {
+  if (scanLoopFrame) {
+    window.cancelAnimationFrame(scanLoopFrame)
+    scanLoopFrame = null
+  }
+}
+
+const runEnhancedScanLoop = () => {
+  if (!isScanning.value || !videoRef.value) return
+
+  scanLoopFrame = window.requestAnimationFrame(runEnhancedScanLoop)
+
+  const video = videoRef.value
+  if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
+
+  const now = performance.now()
+  if (now - lastDecodeAttemptAt < 90) return
+  lastDecodeAttemptAt = now
+  if (isHandlingScan.value) return
+
+  const decodedText = decodeCurrentVideoFrame(video)
+  if (!decodedText) return
+
+  void handleScanResult(decodedText)
+}
+
 // ZXing 扫码器
 let codeReader = null
 let stream = null
+let scanLoopFrame = null
+let lastDecodeAttemptAt = 0
 
 // 生命周期
 onMounted(async () => {
+  bindAudioPrimeListeners()
+
+  if (!isHandheldClient()) {
+    router.replace('/dashboard')
+    return
+  }
+
   await checkPermissions()
   await listDevices()
+  if (isAdmin) {
+    void ensureBinsLoaded()
+  }
   if (currentMode.value === 'camera') {
     await startScanning()
   }
@@ -311,17 +1167,46 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopScanning()
+
+  if (typeof removeAudioPrimeListeners === 'function') {
+    removeAudioPrimeListeners()
+    removeAudioPrimeListeners = null
+  }
+})
+
+onBeforeUnmount(() => {
+  if (operationNoticeTimer) {
+    clearTimeout(operationNoticeTimer)
+  }
 })
 
 // 检查权限
 const checkPermissions = async () => {
-  try {
-    await navigator.mediaDevices.getUserMedia({ video: true })
-    statusMessage.value = 'Camera permission granted'
-    statusType.value = 'success'
-  } catch (error) {
-    statusMessage.value = 'Cannot access camera. Please check permission settings'
+  if (!navigator.mediaDevices?.getUserMedia) {
+    statusMessage.value = 'This browser cannot access the camera.'
     statusType.value = 'error'
+    return
+  }
+
+  if (!navigator.permissions?.query) {
+    statusMessage.value = 'Opening camera...'
+    statusType.value = 'info'
+    return
+  }
+
+  try {
+    const permission = await navigator.permissions.query({ name: 'camera' })
+    if (permission.state === 'denied') {
+      statusMessage.value = 'Cannot access camera. Please check permission settings'
+      statusType.value = 'error'
+      return
+    }
+
+    statusMessage.value = 'Opening camera...'
+    statusType.value = 'info'
+  } catch (error) {
+    statusMessage.value = 'Opening camera...'
+    statusType.value = 'info'
   }
 }
 
@@ -372,46 +1257,30 @@ const startScanning = async () => {
   if (!videoRef.value || isScanning.value) return
   
   try {
+    void primeAudioFeedback()
     isScanning.value = true
     statusMessage.value = 'Starting camera...'
     statusType.value = 'info'
     
     // 获取视频流
-    const constraints = {
-      video: {
-        deviceId: selectedDevice.value ? { exact: selectedDevice.value } : undefined,
-        // 优先使用后置摄像头（通常有闪光灯）
-        facingMode: selectedDevice.value ? undefined : 'environment'
-      }
-    }
+    const constraints = buildPreferredVideoConstraints(selectedDevice.value, 'environment')
     
     stream = await navigator.mediaDevices.getUserMedia(constraints)
     videoRef.value.srcObject = stream
-    
-    // 检测闪光灯支持
-    await checkFlashSupport()
-    
+    await videoRef.value.play()
+
     // 初始化 ZXing
-    codeReader = new BrowserMultiFormatReader()
-    
-    // 开始解码
-    await codeReader.decodeFromVideoDevice(
-      selectedDevice.value || undefined,
-      videoRef.value,
-      (result) => {
-        if (result) {
-          handleScanResult(result.getText())
-        }
-        // 忽略连续的空帧错误
-      }
-    )
+    getCodeReader()
+    lastDecodeAttemptAt = 0
+    stopScanLoop()
+    runEnhancedScanLoop()
     
     statusMessage.value = 'Scan started. Please place the barcode inside the frame'
     statusType.value = 'success'
-    
-    // 开始检测环境亮度
-    startLightDetection()
-    
+
+    window.requestAnimationFrame(() => {
+      void checkFlashSupport()
+    })
   } catch (error) {
     console.error('スキャン開始に失敗しました:', error)
     statusMessage.value = 'Failed to start scan: ' + error.message
@@ -423,6 +1292,7 @@ const startScanning = async () => {
 // 停止扫描
 const stopScanning = async () => {
   isScanning.value = false
+  stopScanLoop()
   
   if (codeReader) {
     try {
@@ -441,9 +1311,6 @@ const stopScanning = async () => {
   if (videoRef.value) {
     videoRef.value.srcObject = null
   }
-  
-  // 停止亮度检测
-  stopLightDetection()
 }
 
 // 切换摄像头
@@ -541,79 +1408,6 @@ const checkFlashSupport = async () => {
   }
 }
 
-// 检测环境亮度
-const detectLightLevel = () => {
-  if (!videoRef.value || !isScanning.value) return
-  
-  try {
-    const video = videoRef.value
-    const canvas = document.createElement('canvas')
-    const ctx = canvas.getContext('2d')
-    
-    canvas.width = video.videoWidth || 320
-    canvas.height = video.videoHeight || 240
-    
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-    
-    // 获取图像数据
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    const data = imageData.data
-    
-    // 计算平均亮度（使用灰度值）
-    let totalBrightness = 0
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i]
-      const g = data[i + 1]
-      const b = data[i + 2]
-      // 使用标准灰度公式
-      const brightness = (r * 0.299 + g * 0.587 + b * 0.114)
-      totalBrightness += brightness
-    }
-    
-    const avgBrightness = totalBrightness / (data.length / 4)
-    
-    // 如果平均亮度低于阈值（0-255，阈值设为80），认为是低光环境
-    const threshold = 80
-    const wasLowLight = isLowLight.value
-    isLowLight.value = avgBrightness < threshold
-    
-    // 如果检测到低光环境且闪光灯未开启，提示用户
-    if (isLowLight.value && !flashOn.value && hasFlash.value && !wasLowLight) {
-      statusMessage.value = 'Low light detected. It is recommended to turn on the light'
-      statusType.value = 'info'
-      // 3秒后自动清除提示
-      setTimeout(() => {
-        if (statusMessage.value.includes('Low light detected')) {
-          statusMessage.value = ''
-        }
-      }, 3000)
-    }
-    
-  } catch (error) {
-    console.error('亮度检测失败:', error)
-  }
-}
-
-// 开始亮度检测
-const startLightDetection = () => {
-  stopLightDetection() // 先清除之前的检测
-  if (videoRef.value) {
-    // 每2秒检测一次环境亮度
-    lightCheckInterval = setInterval(() => {
-      detectLightLevel()
-    }, 2000)
-  }
-}
-
-// 停止亮度检测
-const stopLightDetection = () => {
-  if (lightCheckInterval) {
-    clearInterval(lightCheckInterval)
-    lightCheckInterval = null
-  }
-  isLowLight.value = false
-}
-
 // 切换手电筒
 const toggleFlash = async () => {
   if (!stream) return
@@ -692,15 +1486,16 @@ const handleFileUpload = async (event) => {
   if (!file) return
   
   try {
+    void primeAudioFeedback()
     statusMessage.value = 'Analyzing image...'
     statusType.value = 'info'
     
     // 使用 ZXing 解析图片
     const arrayBuffer = await file.arrayBuffer()
-    const result = await codeReader.decodeFromArrayBuffer(arrayBuffer)
+    const result = await getCodeReader().decodeFromArrayBuffer(arrayBuffer)
     
     if (result) {
-      handleScanResult(result.getText())
+      void handleScanResult(result.getText())
     }
   } catch (error) {
     console.error('画像解析に失敗しました:', error)
@@ -712,197 +1507,487 @@ const handleFileUpload = async (event) => {
 // 处理手动输入
 const handleManualSubmit = () => {
   if (manualCode.value.trim()) {
-    handleScanResult(manualCode.value.trim())
+    void primeAudioFeedback()
+    void handleScanResult(manualCode.value.trim())
     manualCode.value = ''
   }
 }
 
 // 处理扫描结果
-const handleScanResult = (rawData) => {
-  try {
-    // 尝试解析 JSON
-    let parsed = null
-    try {
-      parsed = JSON.parse(rawData)
-    } catch (e) {
-      // 如果不是 JSON，当作普通条码处理
-      parsed = { type: 'UNKNOWN', content: rawData }
-    }
-    
-    scanResult.value = {
-      raw: rawData,
-      parsed: parsed,
-      timestamp: new Date().toLocaleString()
-    }
-    
-    // 震动反馈
-    // 震动反馈 (Haptic Feedback) - 主要针对 Android
-    if (navigator.vibrate) {
-      navigator.vibrate(200)
-    }
+const handleScanResult = async (rawData, options = {}) => {
+  const { bypassCooldown = false, silent = false } = options
+  const normalizedRaw = String(rawData || '').trim()
 
-    // 音效反馈 (Audio Feedback) - 针对 iOS 和所有设备
-    playScanSound()
+  if (!normalizedRaw) return
+  if (isHandlingScan.value) return
+  if (shouldSkipDuplicateScan(normalizedRaw, bypassCooldown)) return
+
+  isHandlingScan.value = true
+  lastProcessedScan.value = normalizedRaw
+  lastProcessedAt.value = Date.now()
+
+  try {
+    statusMessage.value = 'Processing scan...'
+    statusType.value = 'info'
+      scanResult.value = null
+      scanAction.value = null
+
+    // Call Backend Scan API
+    const response = await fetch('/api/scan/scan', {
+      method: 'POST',
+      headers: {
+         'Content-Type': 'application/json',
+         'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify({ raw: normalizedRaw, device: 'web-scanner' })
+    })
+
+    const result = await response.json()
     
-    statusMessage.value = 'Scan successful!'
-    statusType.value = 'success'
+    if (result.success) {
+      scanResult.value = {
+        raw: normalizedRaw,
+        parsed: result.data.data, // Contains specific data points returned from scanController
+        timestamp: new Date().toLocaleString()
+      }
+      scanAction.value = result.data.action
+
+      // 如果返回 action 是 CREATE_ITEM 且带有外部获取的数据，自动填充
+      if (result.data.action === 'CREATE_ITEM') {
+        const itemData = result.data.data
+        newItemForm.value.sku = itemData.sku || normalizedRaw
+        
+        if (itemData.external_data) {
+          const ext = itemData.external_data
+          newItemForm.value.name = ext.name || ''
+          newItemForm.value.category = ext.category || ''
+          newItemForm.value.brand = ext.brand || ''
+          newItemForm.value.price = ''
+          statusMessage.value = 'Found match in cloud database!'
+          statusType.value = 'success'
+          // Optionally auto-open the modal
+          showCreateItemModal.value = true
+        } else {
+           newItemForm.value.name = ''
+           newItemForm.value.category = ''
+           newItemForm.value.brand = ''
+           newItemForm.value.price = ''
+           statusMessage.value = 'Item not found in database. Fast creation available.'
+           statusType.value = 'info'
+        }
+      } else {
+        statusMessage.value = result.data.message || 'Scan successful!'
+        statusType.value = 'success'
+      }
+
+      if (!silent) {
+        triggerScanFeedback()
+      }
+
+    } else {
+      statusMessage.value = result.message || 'Scan failed'
+      statusType.value = 'error'
+    }
     
   } catch (error) {
     console.error('スキャン結果の処理に失敗しました:', error)
     statusMessage.value = 'Failed to process scan result'
     statusType.value = 'error'
+  } finally {
+    isHandlingScan.value = false
   }
 }
 
-// 业务操作
-const handleInbound = () => {
-  if (!scanResult.value) return
-  // TODO: 调用入库API
-  console.log('入庫処理を実行:', scanResult.value)
-}
-
-const handleOutbound = () => {
-  if (!scanResult.value) return
-  // TODO: 调用出库API
-  console.log('出庫処理を実行:', scanResult.value)
-}
-
-const handleInventory = () => {
-  if (!scanResult.value) return
-  // TODO: 调用库存查询API
-  console.log('在庫照会を実行:', scanResult.value)
-}
-
-const handleProduction = async () => {
-  if (!scanResult.value) return
-  
-  // Try to find SKU
-  let sku = null
-  if (scanResult.value.parsed) {
-     if (scanResult.value.parsed.type === 'ITEM') sku = scanResult.value.parsed.id
-     else if (scanResult.value.parsed.sku) sku = scanResult.value.parsed.sku
-  }
-
-  if (!sku) {
-    statusMessage.value = 'Please scan an Item or Lot label first'
-    statusType.value = 'error'
+// 提交新商品
+const submitNewItem = async () => {
+  if (!newItemForm.value.name) {
+    alert('Item name is required')
     return
   }
 
-  const qtyStr = prompt(`Enter production quantity for ${sku}:`, '1')
-  if (!qtyStr) return
-  
-  const qty = parseFloat(qtyStr)
-  if (isNaN(qty) || qty <= 0) {
-    alert('Invalid quantity')
-    return
-  }
-
+  isSubmittingItem.value = true
   try {
-    statusMessage.value = 'Creating production run...'
-    statusType.value = 'info'
-    
-    // Call backend
-    const response = await fetch('/api/production/produce', {
+    const response = await fetch('/api/inventory-management/items', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${localStorage.getItem('token')}`
       },
-      body: JSON.stringify({ sku, qty })
+      body: JSON.stringify({
+        sku: newItemForm.value.sku,
+        name: newItemForm.value.name,
+        category: newItemForm.value.category,
+        description: newItemForm.value.brand ? `Brand: ${newItemForm.value.brand}` : '',
+        price: newItemForm.value.price === '' ? null : Number(newItemForm.value.price)
+      })
     })
 
     const result = await response.json()
     if (result.success) {
-      statusMessage.value = `Production successful! New Lot: ${result.data.lot.lot_number}`
+      statusMessage.value = 'Item successfully registered locally!'
       statusType.value = 'success'
-      alert(`Production Complete!\nNew Lot: ${result.data.lot.lot_number}\nMat. Consumed: ${result.data.consumed}`)
+      showCreateItemModal.value = false
+      await handleScanResult(newItemForm.value.sku, { bypassCooldown: true, silent: true })
     } else {
-      throw new Error(result.message)
+      alert(result.message || 'Failed to create item')
     }
-  } catch (error) {
-    console.error('Production error:', error)
-    statusMessage.value = 'Production failed: ' + error.message
-    statusType.value = 'error'
-    alert('Production failed: ' + error.message)
+  } catch (err) {
+    console.error('Error creating item:', err)
+    alert('Network error while saving item')
+  } finally {
+    isSubmittingItem.value = false
   }
 }
 
-const handleCount = async () => {
+// 业务操作
+const handleInbound = async () => {
   if (!scanResult.value) return
-  
-  // Try to find Lot Number
-  let lotNumber = null
-  if (scanResult.value.parsed && scanResult.value.parsed.type === 'LOT') {
-    lotNumber = scanResult.value.parsed.id
+
+  // 从扫描结果中提取商品信息
+  const parsed = scanResult.value.parsed
+  let sku = ''
+  let itemName = ''
+
+  if (parsed?.item) {
+    sku = parsed.item.sku || ''
+    itemName = parsed.item.name || ''
+  } else if (parsed?.sku) {
+    sku = parsed.sku
+    itemName = parsed.name || sku
+  } else {
+    // 直接用原始条码作为 SKU
+    sku = scanResult.value.raw || ''
+    itemName = sku
   }
 
-  if (!lotNumber) {
-    statusMessage.value = 'Please scan a LOT label for counting'
+  // 生成默认批次号（当天日期 + SKU 后4位）
+  const today = new Date()
+  const dateStr = `${today.getFullYear()}${String(today.getMonth()+1).padStart(2,'0')}${String(today.getDate()).padStart(2,'0')}`
+  const skuSuffix = sku.slice(-4)
+
+  inboundForm.value = {
+    sku,
+    item_name: itemName,
+    lot_number: `LOT-${dateStr}-${skuSuffix}`,
+    qty: 1,
+    bin_code: 'Refrigerator',
+    expiry_date: ''
+  }
+  await ensureBinsLoaded()
+  prepareInboundBinPicker()
+  showInboundModal.value = true
+}
+
+const submitInbound = async () => {
+  if (!inboundForm.value.sku || inboundForm.value.qty <= 0 || !String(inboundForm.value.bin_code || '').trim()) {
+    statusMessage.value = 'Please complete all inbound fields.'
+    statusType.value = 'error'
+    return
+  }
+  isSubmittingInbound.value = true
+  try {
+    const response = await fetch('/api/scan/inbound', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify({
+        lot_number: inboundForm.value.lot_number,
+        sku: inboundForm.value.sku,
+        qty: Number(inboundForm.value.qty),
+        bin_code: inboundForm.value.bin_code,
+        expiry_date: inboundForm.value.expiry_date || null
+      })
+    })
+    const result = await response.json()
+    if (result.success) {
+      statusMessage.value = 'Inbound saved successfully.'
+      statusType.value = 'success'
+      showActionFeedbackModal(
+        'Inbound Complete',
+        `${inboundForm.value.item_name} × ${inboundForm.value.qty} was added to ${inboundForm.value.bin_code}.`
+      )
+      showInboundModal.value = false
+      if (canUseVibrationFeedback()) navigator.vibrate([100, 50, 100])
+      await ensureBinsLoaded({ force: true })
+      await handleScanResult(inboundForm.value.sku, { bypassCooldown: true, silent: true })
+    } else {
+      throw new Error(result.message || 'Inbound failed')
+    }
+  } catch (err) {
+    statusMessage.value = `Inbound failed: ${err.message}`
+    statusType.value = 'error'
+    showOperationNotice('Inbound Failed', err.message, 'error')
+  } finally {
+    isSubmittingInbound.value = false
+  }
+}
+
+const resolveMoveContext = () => {
+  const parsed = scanResult.value?.parsed
+
+  if (parsed?.lot) {
+    return {
+      lot: parsed.lot,
+      itemName: parsed.lot.item?.name || parsed.lot.sku,
+      fromBinCode: parsed.lot.bin?.bin_code || ''
+    }
+  }
+
+  if (parsed?.item) {
+    const activeLots = (parsed.item.lots || []).filter((lot) => Number(lot.qty || 0) > 0)
+
+    if (activeLots.length === 0) {
+      return { error: 'This item has no active lot available for a bin move.' }
+    }
+
+    if (activeLots.length > 1) {
+      return { error: 'This item exists in multiple lots. Please scan a specific lot label before moving it.' }
+    }
+
+    return {
+      lot: activeLots[0],
+      itemName: parsed.item.name || parsed.item.sku,
+      fromBinCode: activeLots[0].bin?.bin_code || ''
+    }
+  }
+
+  return { error: 'Please scan a lot label first, or scan an item that only has one active lot.' }
+}
+
+const handleMove = async () => {
+  if (!scanResult.value) return
+
+  const moveContext = resolveMoveContext()
+
+  if (moveContext.error) {
+    statusMessage.value = moveContext.error
     statusType.value = 'error'
     return
   }
 
-  const actualQtyStr = prompt(`Enter ACTUAL quantity for Lot ${lotNumber}:`)
-  if (!actualQtyStr) return
-  
-  const actualQty = parseFloat(actualQtyStr)
-  if (isNaN(actualQty) || actualQty < 0) {
-    alert('Invalid quantity')
+  const { lot, itemName, fromBinCode } = moveContext
+
+  moveForm.value = {
+    lot_number: lot.lot_number,
+    sku: lot.sku,
+    item_name: itemName,
+    from_bin_code: fromBinCode || 'Unassigned',
+    available_qty: Number(lot.qty || 0),
+    qty: Number(lot.qty || 0),
+    to_bin_code: fromBinCode && fromBinCode !== 'Refrigerator' ? 'Refrigerator' : '',
+    notes: ''
+  }
+
+  await ensureBinsLoaded()
+  prepareMoveBinPicker()
+  showMoveModal.value = true
+}
+
+const submitMove = async () => {
+  const availableQty = Number(moveForm.value.available_qty || 0)
+  const moveQty = Number(moveForm.value.qty)
+
+  if (!moveForm.value.lot_number || !moveForm.value.sku || !moveForm.value.to_bin_code.trim()) {
+    statusMessage.value = 'Please complete all move fields.'
+    statusType.value = 'error'
     return
   }
-  
-  const reason = prompt('Enter reason for adjustment (optional):', 'Cycle Count')
 
-  // ✅ 方案一：前端"死磕"模式 (Queue)
-  // 不直接发请求，而是加入队列
-  const taskId = `count-${lotNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-  
-  requestQueue.value.unshift({
-    id: taskId,
-    lot: lotNumber,
-    qty: actualQty,
-    reason: reason,
-    status: 'pending',
-    retryCount: 0,
-    timestamp: new Date().toLocaleString(),
-    desc: `Count Lot ${lotNumber}: ${actualQty}` 
-  })
-  
-  statusMessage.value = 'Task queued. Uploading in background...'
-  statusType.value = 'success'
-  
-  // 立即触发一次处理
-  processQueue()
-  
-  // 清除扫码结果，准备下一次扫描 (Fire and Forget!)
-  scanResult.value = null
+  if (!Number.isFinite(moveQty) || moveQty <= 0 || moveQty > availableQty) {
+    statusMessage.value = `Move quantity must be between 1 and ${availableQty}.`
+    statusType.value = 'error'
+    return
+  }
+
+  isSubmittingMove.value = true
+
+  try {
+    const response = await fetch('/api/scan/move', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify({
+        lot_number: moveForm.value.lot_number,
+        sku: moveForm.value.sku,
+        qty: moveQty,
+        to_bin_code: moveForm.value.to_bin_code.trim(),
+        notes: moveForm.value.notes.trim()
+      })
+    })
+
+    const result = await response.json()
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Move failed')
+    }
+
+    const movedLot = result.data?.moved_lot
+    const moveSummary = result.data?.split_created
+      ? `A new split lot ${movedLot?.lot_number} was created in ${movedLot?.bin_code}.`
+      : `${moveForm.value.lot_number} was moved to ${movedLot?.bin_code || moveForm.value.to_bin_code}.`
+
+    statusMessage.value = 'Move completed successfully.'
+    statusType.value = 'success'
+    showActionFeedbackModal('Move Complete', moveSummary)
+    showMoveModal.value = false
+    await ensureBinsLoaded({ force: true })
+    await handleScanResult(scanResult.value.raw, { bypassCooldown: true, silent: true })
+  } catch (error) {
+    statusMessage.value = `Move failed: ${error.message}`
+    statusType.value = 'error'
+    showOperationNotice('Move Failed', error.message, 'error')
+  } finally {
+    isSubmittingMove.value = false
+  }
+}
+
+const handleOutbound = () => {
+  if (!scanResult.value) return
+
+  const { candidates, strategy, error } = resolveOutboundCandidates()
+
+  if (error) {
+    statusMessage.value = error
+    statusType.value = 'error'
+    return
+  }
+
+  outboundStrategy.value = strategy || 'DIRECT'
+  outboundCandidates.value = candidates
+  selectedOutboundLotKey.value = candidates[0]?.key || ''
+  outboundForm.value = {
+    sku: '',
+    item_name: '',
+    lot_number: '',
+    source_bin_code: '',
+    available_qty: 0,
+    qty: 1,
+    uom: 'pcs'
+  }
+  syncOutboundCandidate()
+  showOutboundModal.value = true
+}
+
+const submitOutbound = async () => {
+  const qty = Number(outboundForm.value.qty)
+
+  if (!outboundForm.value.sku) {
+    statusMessage.value = 'Please scan an item or lot before outbound.'
+    statusType.value = 'error'
+    return
+  }
+
+  if (!isOutboundFifoMode.value && !outboundForm.value.lot_number) {
+    statusMessage.value = 'Please choose a specific lot and source bin first.'
+    statusType.value = 'error'
+    return
+  }
+
+  if (!Number.isFinite(qty) || qty <= 0 || qty > Number(outboundForm.value.available_qty || 0)) {
+    statusMessage.value = `Outbound quantity must be between 1 and ${outboundForm.value.available_qty}.`
+    statusType.value = 'error'
+    return
+  }
+
+  isSubmittingOutbound.value = true
+
+  try {
+    statusMessage.value = 'Saving outbound record...'
+    statusType.value = 'info'
+
+    const response = await fetch('/api/scan/outbound', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify(
+        isOutboundFifoMode.value
+          ? {
+              sku: outboundForm.value.sku,
+              qty,
+              strategy: 'FIFO'
+            }
+          : {
+              lot_number: outboundForm.value.lot_number,
+              sku: outboundForm.value.sku,
+              qty,
+              source_bin_code: outboundForm.value.source_bin_code
+            }
+      )
+    })
+
+    const result = await response.json()
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Outbound failed')
+    }
+
+    const deductions = result.data?.deductions || []
+    const directSourceBinCode = outboundForm.value.source_bin_code || 'selected bin'
+    const fifoSummary = deductions
+      .map((entry) => `${entry.deducted_qty} from ${entry.lot_number} (${entry.bin_code})`)
+      .join(', ')
+
+    statusMessage.value = 'Outbound saved successfully.'
+    statusType.value = 'success'
+    showActionFeedbackModal(
+      'Outbound Complete',
+      isOutboundFifoMode.value
+        ? `${outboundForm.value.item_name} -${qty} was deducted by FIFO. ${fifoSummary}`
+        : `${outboundForm.value.item_name} -${qty} was deducted from ${directSourceBinCode}.`
+    )
+    showOutboundModal.value = false
+    await handleScanResult(scanResult.value.raw, { bypassCooldown: true, silent: true })
+  } catch (error) {
+    statusMessage.value = `Outbound failed: ${error.message}`
+    statusType.value = 'error'
+    showOperationNotice('Outbound Failed', error.message, 'error')
+  } finally {
+    isSubmittingOutbound.value = false
+  }
 }
 
 const clearResult = () => {
   scanResult.value = null
+  scanAction.value = null
+  showInboundModal.value = false
+  showMoveModal.value = false
+  showOutboundModal.value = false
+  outboundCandidates.value = []
+  selectedOutboundLotKey.value = ''
+  outboundStrategy.value = 'DIRECT'
+  actionFeedbackModal.value.visible = false
+  if (operationNoticeTimer) {
+    clearTimeout(operationNoticeTimer)
+  }
+  operationNotice.value.visible = false
   statusMessage.value = ''
 }
 
 // 播放扫描音效
 const playScanSound = () => {
-  // 简单的 "叮" 声 (Base64 encoded wav)
-  const audioContext = new (window.AudioContext || window.webkitAudioContext)()
-  const oscillator = audioContext.createOscillator()
-  const gainNode = audioContext.createGain()
-  
-  oscillator.connect(gainNode)
-  gainNode.connect(audioContext.destination)
-  
-  oscillator.type = 'sine'
-  oscillator.frequency.setValueAtTime(1200, audioContext.currentTime)
-  oscillator.frequency.exponentialRampToValueAtTime(600, audioContext.currentTime + 0.1)
-  
-  gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
-  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1)
-  
-  oscillator.start()
-  oscillator.stop(audioContext.currentTime + 0.1)
+  void playTonePattern(
+    [
+      { frequency: 1240, start: 0, duration: 0.07 },
+      { frequency: 1680, start: 0.085, duration: 0.08 }
+    ],
+    { volume: 0.2, waveform: 'triangle' }
+  )
+}
+
+const playActionSuccessSound = () => {
+  void playTonePattern(
+    [
+      { frequency: 920, start: 0, duration: 0.08 },
+      { frequency: 1280, start: 0.095, duration: 0.09 },
+      { frequency: 1560, start: 0.2, duration: 0.11 }
+    ],
+    { volume: 0.24, waveform: 'sine' }
+  )
 }
 </script>
 
@@ -959,10 +2044,16 @@ const playScanSound = () => {
 }
 
 .camera-container {
-  position: relative;
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  background: #f9fafb;
+}
+
+.camera-stage {
+  position: relative;
+  overflow: hidden;
+  background: #000000;
 }
 
 .camera-video {
@@ -1091,81 +2182,6 @@ const playScanSound = () => {
   }
 }
 
-.low-light-hint {
-  margin: 20px 0;
-  padding: 15px 20px;
-  background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-  animation: slideIn 0.3s ease-out;
-}
-
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.hint-content {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: white;
-  font-weight: 500;
-}
-
-.hint-icon {
-  font-size: 1.5rem;
-  animation: moonPulse 2s ease-in-out infinite;
-}
-
-@keyframes moonPulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.6;
-  }
-}
-
-.hint-content span:not(.hint-icon) {
-  flex: 1;
-  line-height: 1.5;
-}
-
-.hint-btn {
-  padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.2);
-  border: 2px solid white;
-  border-radius: 6px;
-  color: white;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.hint-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: translateY(-1px);
-}
-
-@media (max-width: 768px) {
-  .hint-content {
-    flex-direction: column;
-    text-align: center;
-  }
-  
-  .hint-btn {
-    width: 100%;
-  }
-}
-
 .file-upload {
   padding: 40px;
   text-align: center;
@@ -1252,6 +2268,57 @@ const playScanSound = () => {
   margin-bottom: 25px;
 }
 
+.workflow-guide-card {
+  margin: 0 0 24px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, rgba(241, 245, 249, 0.96) 100%);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.workflow-guide-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.workflow-guide-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.workflow-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #334155;
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-guide-compact {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-guide-compact-item {
+  border-radius: 12px;
+  border: 1px solid #dbe3f0;
+  background: #f8fafc;
+  padding: 11px 12px;
+  color: #334155;
+  line-height: 1.5;
+}
+
 .result-item {
   margin-bottom: 15px;
 }
@@ -1279,6 +2346,173 @@ const playScanSound = () => {
   margin: 10px 0;
   border: 1px solid var(--glass-border);
   color: var(--text-primary);
+}
+
+.inquiry-panel {
+  margin: 0 0 24px;
+  padding: 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.inquiry-header,
+.inquiry-summary,
+.inquiry-meta,
+.section-topline,
+.inquiry-row {
+  display: flex;
+}
+
+.inquiry-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.inquiry-eyebrow {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+.inquiry-header h4 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+
+.inquiry-subtitle {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.inquiry-type {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.inquiry-summary {
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.inquiry-card {
+  flex: 1;
+  min-width: 130px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.inquiry-card span,
+.meta-pill span {
+  display: block;
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+
+.inquiry-card strong,
+.meta-pill strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-primary);
+}
+
+.inquiry-card.ok {
+  background: rgba(236, 253, 245, 0.95);
+}
+
+.inquiry-card.danger {
+  background: rgba(255, 241, 242, 0.95);
+}
+
+.inquiry-meta {
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.meta-pill {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.88);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.inquiry-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.inquiry-section {
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.88);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.section-topline {
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+.section-topline span {
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+.inquiry-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.inquiry-row {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.inquiry-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.inquiry-row strong {
+  display: block;
+  color: var(--text-primary);
+}
+
+.inquiry-row p {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+.inquiry-row span {
+  white-space: nowrap;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+
+.inquiry-empty {
+  font-size: 0.88rem;
+  color: #6b7280;
 }
 
 .business-actions {
@@ -1312,6 +2546,66 @@ const playScanSound = () => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
+.operation-toast {
+  position: sticky;
+  top: 16px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid transparent;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
+}
+
+.operation-toast.success {
+  background: rgba(236, 253, 245, 0.92);
+  border-color: rgba(16, 185, 129, 0.18);
+}
+
+.operation-toast.error {
+  background: rgba(254, 242, 242, 0.94);
+  border-color: rgba(239, 68, 68, 0.18);
+}
+
+.operation-toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  font-size: 1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.operation-toast.success .operation-toast-icon {
+  background: rgba(16, 185, 129, 0.14);
+  color: #059669;
+}
+
+.operation-toast.error .operation-toast-icon {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.operation-toast-copy strong {
+  display: block;
+  color: #0f172a;
+  font-size: 0.98rem;
+}
+
+.operation-toast-copy p {
+  margin: 4px 0 0;
+  color: #475569;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
 
 
 .status-message {
@@ -1406,6 +2700,10 @@ const playScanSound = () => {
   .scanner-container {
     padding: 15px;
   }
+
+  .scanner-header {
+    margin-bottom: 18px;
+  }
   
   .camera-video {
     height: 300px;
@@ -1417,16 +2715,289 @@ const playScanSound = () => {
   }
   
   .mode-selector {
-    flex-direction: column;
-    align-items: center;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .mode-btn {
+    width: 100%;
+    padding: 12px 10px;
+    font-size: 0.95rem;
   }
   
   .business-actions {
     flex-direction: column;
   }
+
+  .camera-controls {
+    flex-wrap: wrap;
+  }
+
+  .inquiry-grid {
+    grid-template-columns: 1fr;
+  }
   
   .action-btn {
     width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .mode-selector {
+    grid-template-columns: 1fr;
+  }
+
+  .scan-hint {
+    margin-top: 14px;
+    padding: 0 18px;
+    text-align: center;
+    font-size: 0.95rem;
+    line-height: 1.35;
+  }
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+  overflow-y: auto;
+  padding: 24px 16px;
+  box-sizing: border-box;
+}
+
+.modal-overlay-foreground {
+  z-index: 1200;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  max-height: min(88vh, 760px);
+  display: flex;
+  flex-direction: column;
+}
+
+.action-feedback-modal {
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 28px 24px 24px;
+  max-width: 360px;
+}
+
+.action-feedback-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  font-size: 1.75rem;
+  font-weight: 800;
+}
+
+.action-feedback-modal h3 {
+  margin: 0;
+  font-size: 1.35rem;
+  color: #0f172a;
+}
+
+.action-feedback-modal p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.action-feedback-btn {
+  width: 100%;
+  margin-top: 6px;
+  min-height: 48px;
+}
+
+.modal-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  color: #111827;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.form-body {
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: #374151;
+}
+
+.input-field {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+.disabled-input {
+  background-color: #f3f4f6;
+  color: #6b7280;
+  cursor: not-allowed;
+}
+
+.form-hint {
+  margin-top: 6px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.form-hint-error {
+  color: #dc2626;
+}
+
+.outbound-plan-list {
+  display: grid;
+  gap: 10px;
+}
+
+.outbound-plan-card {
+  border: 1px solid #dbe3f0;
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
+}
+
+.outbound-plan-step {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.outbound-plan-main {
+  margin-top: 4px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.outbound-plan-meta {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+
+.btn-cancel, .btn-primary {
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-cancel {
+  background: white;
+  border: 1px solid #d1d5db;
+  color: #374151;
+}
+
+.btn-primary {
+  background: #10b981;
+  border: 1px solid #10b981;
+  color: white;
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .modal-overlay {
+    align-items: flex-start;
+    padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
+  }
+
+  .modal-content {
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px);
+    border-radius: 18px;
+  }
+
+  .modal-header {
+    padding: 16px 18px;
+  }
+
+  .form-body {
+    padding: 18px;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .form-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin: 20px -18px -18px;
+    padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
+    background: rgba(255, 255, 255, 0.96);
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .btn-cancel,
+  .btn-primary {
+    flex: 1 1 140px;
+    min-height: 44px;
   }
 }
 </style>
