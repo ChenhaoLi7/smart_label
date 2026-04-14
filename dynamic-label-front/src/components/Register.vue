@@ -3,13 +3,13 @@
     <div class="register-container">
       <!-- 品牌标识 -->
       <div class="brand-header">
-        <h1 class="brand-title">Smart Warehouse</h1>
-        <p class="brand-subtitle">智能仓库管理系统</p>
+        <h1 class="brand-title">Pilot Inventory System</h1>
+        <p class="brand-subtitle">Pilot 仓库管理系统</p>
       </div>
 
       <!-- 主标题 -->
       <h2 class="welcome-title">Create your account</h2>
-      <p class="welcome-subtitle">创建您的账户</p>
+      <p class="welcome-subtitle">Set up your account to continue</p>
 
       <!-- 注册表单 -->
       <form @submit.prevent="handleRegister" class="register-form">
@@ -82,40 +82,8 @@
       <div class="signin-section">
         <p class="signin-text">
           Already have an account? 
-          <router-link to="/" class="signin-link">Sign in</router-link>
+          <router-link to="/login" class="signin-link">Sign in</router-link>
         </p>
-      </div>
-
-      <!-- 分隔线 -->
-      <div class="divider">
-        <span class="divider-text">OR</span>
-      </div>
-
-      <!-- 系统特色 -->
-      <div class="features-section">
-        <h3 class="features-title">🎯 System Features</h3>
-        <div class="features-grid">
-          <div class="feature-item">
-            <span class="feature-icon">📱</span>
-            <span class="feature-text">Scan & Manage</span>
-          </div>
-          <div class="feature-item">
-            <span class="feature-icon">📦</span>
-            <span class="feature-text">Smart Inventory</span>
-          </div>
-          <div class="feature-item">
-            <span class="feature-icon">🏷️</span>
-            <span class="feature-text">Custom Labels</span>
-          </div>
-          <div class="feature-item">
-            <span class="feature-icon">📊</span>
-            <span class="feature-text">Real-time Data</span>
-          </div>
-          <div class="feature-item">
-            <span class="feature-icon">🤖</span>
-            <span class="feature-text">AI Analytics</span>
-          </div>
-        </div>
       </div>
     </div>
   </div>
@@ -146,14 +114,14 @@ export default {
     const handleRegister = async () => {
       if (loading.value) return
       
-      // 验证密码
+      // Validate password
       if (password.value !== confirmPassword.value) {
-        error.value = '两次输入的密码不一致'
+        error.value = 'Passwords do not match'
         return
       }
       
       if (password.value.length < 6) {
-        error.value = '密码长度至少6位'
+        error.value = 'Password must be at least 6 characters'
         return
       }
       
@@ -168,7 +136,7 @@ export default {
           password: password.value
         })
         
-        success.value = '注册成功！即将跳转到登录页面...'
+        success.value = 'Account created successfully. Redirecting to sign in...'
         
         // 延迟跳转
         setTimeout(() => {
@@ -177,15 +145,15 @@ export default {
         
       } catch (e) {
         if (e.response?.status === 400) {
-          if (e.response.data.message.includes('邮箱已注册')) {
-            error.value = '该邮箱已被注册，请使用其他邮箱或直接登录'
+          if ((e.response.data.message || '').toLowerCase().includes('exists')) {
+            error.value = 'Username or email already exists'
           } else {
-            error.value = e.response.data.message
+            error.value = e.response.data.message || 'Registration failed'
           }
         } else if (e.code === 'NETWORK_ERROR') {
-          error.value = '网络连接失败，请检查后端服务是否启动'
+          error.value = 'Network error. Please make sure backend services are running'
         } else {
-          error.value = e.response?.data?.message || '注册失败，请重试'
+          error.value = e.response?.data?.message || 'Registration failed. Please try again'
         }
       } finally {
         loading.value = false

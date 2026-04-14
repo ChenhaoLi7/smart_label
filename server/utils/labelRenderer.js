@@ -208,14 +208,79 @@ const generateLabelPDF = async (printType, labelData, outputPath) => {
             return await generateBinLabelPDF(labelData, outputPath)
         case 'ITEM':
             return await generateItemLabelPDF(labelData, outputPath)
+        case 'UNIT':
+            return await generateUnitLabelPDF(labelData, outputPath)
         default:
             throw new Error(`不支持的打印类型: ${printType}`)
     }
+}
+
+/**
+ * 生成单品标签 PDF (50x30mm) - 一物一码
+ */
+const generateUnitLabelPDF = async (labelData, outputPath) => {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const doc = new PDFDocument({
+                size: [141.73, 85.04], // 50mm x 30mm
+                margin: 3
+            })
+
+            const stream = fs.createWriteStream(outputPath)
+            doc.pipe(stream)
+
+            for (let i = 0; i < labelData.length; i++) {
+                if (i > 0) doc.addPage()
+
+                const label = labelData[i]
+
+                // Header
+                doc.fontSize(9).font('Helvetica-Bold').text('UNIT ID', { align: 'center' })
+                doc.moveDown(0.2)
+
+                // SN
+                doc.fontSize(8).font('Helvetica-Bold').text('SN:', { continued: true })
+                doc.font('Helvetica').text(' ' + label.sn)
+                doc.moveDown(0.15)
+
+                // SKU
+                doc.fontSize(8).font('Helvetica-Bold').text('SKU:', { continued: true })
+                doc.font('Helvetica').text(' ' + label.sku)
+                doc.moveDown(0.15)
+
+                // Lot
+                doc.fontSize(8).font('Helvetica-Bold').text('Lot:', { continued: true })
+                doc.font('Helvetica').text(' ' + label.lot)
+
+                // QR Code (Right side)
+                const qrCodeDataUrl = await QRCode.toDataURL(label.qr_content, {
+                    errorCorrectionLevel: 'M',
+                    type: 'image/png',
+                    width: 150
+                })
+
+                const qrSize = 55
+                // Place QR code on the right
+                doc.image(qrCodeDataUrl, doc.page.width - qrSize - 5, 12, { width: qrSize, height: qrSize })
+            }
+
+            doc.end()
+
+            stream.on('finish', () => {
+                resolve(outputPath)
+            })
+
+            stream.on('error', reject)
+        } catch (error) {
+            reject(error)
+        }
+    })
 }
 
 module.exports = {
     generateLabelPDF,
     generateLotLabelPDF,
     generateBinLabelPDF,
-    generateItemLabelPDF
+    generateItemLabelPDF,
+    generateUnitLabelPDF
 }

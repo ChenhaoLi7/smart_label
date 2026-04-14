@@ -5,36 +5,8 @@ const { Op } = require('sequelize');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-
-// 临时使用简化User模型
-const { DataTypes } = require('sequelize');
-const sequelize = require('../config/database');
-
-const User = sequelize.define('User', {
-  username: {
-    type: DataTypes.STRING,
-    allowNull: false,
-    unique: true
-  },
-  email: {
-    type: DataTypes.STRING,
-    allowNull: false,
-    unique: true,
-    validate: { isEmail: true }
-  },
-  password: {
-    type: DataTypes.STRING,
-    allowNull: false
-  },
-  avatar: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    comment: '用户头像URL'
-  }
-}, {
-  tableName: 'users',
-  timestamps: true
-});
+const { User } = require('../models');
+const config = require('../config/config');
 
 // 配置multer用于文件上传
 const storage = multer.diskStorage({
@@ -91,20 +63,26 @@ const register = async (req, res) => {
     // 加密密码
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // 首个注册用户自动成为管理员，后续用户为操作员
+    const userCount = await User.count();
+    const role = userCount === 0 ? 'admin' : 'operator';
+
     // 创建用户
     const user = await User.create({
       username,
       email,
-      password: hashedPassword
+      password: hashedPassword,
+      role
     });
 
     res.status(201).json({
       success: true,
-      message: '用户注册成功',
+      message: 'Registration successful',
       data: {
         id: user.id,
         username: user.username,
-        email: user.email
+        email: user.email,
+        role: user.role
       }
     });
   } catch (error) {
@@ -152,11 +130,12 @@ const login = async (req, res) => {
     const token = jwt.sign(
       {
         userId: user.id,
+        id: user.id,
         username: user.username,
-        role: 'admin'
+        role: user.role || 'operator'
       },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '24h' }
+      config.jwt.secret,
+      { expiresIn: config.jwt.expiresIn }
     );
 
     res.json({
@@ -168,7 +147,7 @@ const login = async (req, res) => {
           id: user.id,
           username: user.username,
           email: user.email,
-          role: 'admin',
+          role: user.role || 'operator',
           avatar: user.avatar
         }
       }
@@ -185,6 +164,49 @@ const login = async (req, res) => {
       success: false,
       message: '用户登录失败',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// 忘记密码 - 通过邮箱重置
+const forgotPassword = async (req, res) => {
+  try {
+    const { email, newPassword } = req.body;
+
+    if (!email || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters'
+      });
+    }
+
+    const user = await User.findOne({ where: { email } });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await user.update({ password: hashedPassword });
+
+    return res.json({
+      success: true,
+      message: 'Password reset successful'
+    });
+  } catch (error) {
+    console.error('重置密码失败:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Password reset failed'
     });
   }
 };
@@ -245,7 +267,7 @@ const getUserInfo = async (req, res) => {
     const userId = req.user.userId;
 
     const user = await User.findByPk(userId, {
-      attributes: ['id', 'username', 'email', 'avatar', 'createdAt']
+      attributes: ['id', 'username', 'email', 'role', 'avatar', 'createdAt']
     });
 
     if (!user) {
@@ -262,7 +284,7 @@ const getUserInfo = async (req, res) => {
           id: user.id,
           username: user.username,
           email: user.email,
-          role: 'admin',
+          role: user.role || 'operator',
           avatar: user.avatar,
           createdAt: user.createdAt
         }
@@ -277,10 +299,102 @@ const getUserInfo = async (req, res) => {
   }
 };
 
+// 管理员查看所有注册用户
+const listUsers = async (req, res) => {
+  try {
+    const users = await User.findAll({
+      attributes: ['id', 'username', 'email', 'role', 'status', 'avatar', 'createdAt', 'updatedAt'],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const summary = users.reduce((acc, user) => {
+      acc.total += 1;
+      acc[user.role] = (acc[user.role] || 0) + 1;
+      if (user.status === 'active') {
+        acc.active += 1;
+      }
+      return acc;
+    }, {
+      total: 0,
+      admin: 0,
+      operator: 0,
+      viewer: 0,
+      active: 0
+    });
+
+    res.json({
+      success: true,
+      data: {
+        users,
+        summary
+      }
+    });
+  } catch (error) {
+    console.error('获取用户列表失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取用户列表失败'
+    });
+  }
+};
+
+// 管理员提升用户为管理员
+const promoteUserToAdmin = async (req, res) => {
+  try {
+    const targetUserId = Number(req.params.id);
+
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: '无效的用户ID'
+      });
+    }
+
+    const targetUser = await User.findByPk(targetUserId, {
+      attributes: ['id', 'username', 'email', 'role', 'status', 'avatar', 'createdAt', 'updatedAt']
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: '用户不存在'
+      });
+    }
+
+    if (targetUser.role === 'admin') {
+      return res.status(400).json({
+        success: false,
+        message: '该用户已经是管理员'
+      });
+    }
+
+    await targetUser.update({
+      role: 'admin'
+    });
+
+    res.json({
+      success: true,
+      message: '管理员权限已授予，该用户下次重新登录后生效',
+      data: {
+        user: targetUser
+      }
+    });
+  } catch (error) {
+    console.error('提升管理员权限失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '提升管理员权限失败'
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
+  forgotPassword,
   uploadAvatar,
   getUserInfo,
+  listUsers,
+  promoteUserToAdmin,
   upload // 导出multer中间件
 };

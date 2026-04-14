@@ -23,6 +23,12 @@ const Lot = sequelize.define('Lot', {
     allowNull: false,
     comment: '数量'
   },
+  version: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    comment: '乐观锁版本号'
+  },
   uom: {
     type: DataTypes.STRING(20),
     defaultValue: 'pcs',
@@ -78,4 +84,3 @@ const Lot = sequelize.define('Lot', {
 })
 
 module.exports = Lot
-

@@ -12,34 +12,6 @@ export default {
   name: "App",
   components: {
     PWAInstallPrompt
-  },
-  mounted() {
-    // 注册 Service Worker
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/service-worker.js')
-          .then((registration) => {
-            console.log('Service Worker 注册成功:', registration.scope)
-            
-            // 检查更新
-            registration.addEventListener('updatefound', () => {
-              const newWorker = registration.installing
-              newWorker.addEventListener('statechange', () => {
-                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  // 有新版本可用
-                  if (confirm('发现新版本，是否立即更新？')) {
-                    newWorker.postMessage({ type: 'SKIP_WAITING' })
-                    window.location.reload()
-                  }
-                }
-              })
-            })
-          })
-          .catch((error) => {
-            console.log('Service Worker 注册失败:', error)
-          })
-      })
-    }
   }
 };
 </script>
@@ -105,6 +77,6 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-align: center;
   color: #2c3e50;
-  margin-top: 60px;
+  margin-top: 0;
 }
 </style>

@@ -3,18 +3,17 @@ const sequelize = require('../config/database')
 
 // Create BOM (Supports creating a new version or initial version)
 const createBOM = async (req, res) => {
-    const transaction = await sequelize.transaction();
     try {
         const { sku, lines, version, notes } = req.body
 
-        if (!sku || !lines || !Array.isArray(lines)) {
+        if (!sku || !lines || !Array.isArray(lines) || lines.length === 0) {
             return res.status(400).json({ success: false, message: 'Invalid parameters: sku and lines are required' })
         }
 
         // Check if SKU exists
         const item = await Item.findOne({ where: { sku } })
         if (!item) {
-            throw new Error(`SKU ${sku} not found in Item master`)
+            return res.status(404).json({ success: false, message: `SKU ${sku} not found in Item master` })
         }
 
         // Default versioning logic: if not provided, find latest and increment? 
@@ -22,31 +21,31 @@ const createBOM = async (req, res) => {
         // If BOM exists for this SKU and Version, throw error.
         const existingBOM = await BOMHeader.findOne({ where: { sku, version: version || 'v1.0' } })
         if (existingBOM) {
-            throw new Error(`BOM for ${sku} version ${version || 'v1.0'} already exists.`)
+            return res.status(400).json({ success: false, message: `BOM for ${sku} version ${version || 'v1.0'} already exists.` })
         }
 
-        // Create Header
-        const bomHeader = await BOMHeader.create({
-            sku,
-            version: version || 'v1.0',
-            status: 'ACTIVE', // Default to ACTIVE for now
-            notes,
-            created_by: req.user?.username || 'system'
-        }, { transaction })
+        const bomHeader = await sequelize.transaction(async (transaction) => {
+            const header = await BOMHeader.create({
+                sku,
+                version: version || 'v1.0',
+                status: 'ACTIVE',
+                notes,
+                created_by: req.user?.username || 'system'
+            }, { transaction })
 
-        // Create Lines
-        const bomLines = lines.map(line => ({
-            bom_id: bomHeader.id,
-            component_sku: line.component_sku,
-            qty_per: line.qty_per,
-            uom: line.uom || 'pcs',
-            scrap_rate: line.scrap_rate || 0,
-            notes: line.notes
-        }))
+            const bomLines = lines.map(line => ({
+                bom_id: header.id,
+                component_sku: line.component_sku,
+                qty_per: line.qty_per,
+                uom: line.uom || 'pcs',
+                scrap_rate: line.scrap_rate || 0,
+                notes: line.notes
+            }))
 
-        await BOMLine.bulkCreate(bomLines, { transaction })
+            await BOMLine.bulkCreate(bomLines, { transaction })
 
-        await transaction.commit()
+            return header
+        })
 
         res.json({
             success: true,
@@ -55,7 +54,6 @@ const createBOM = async (req, res) => {
         })
 
     } catch (error) {
-        await transaction.rollback()
         console.error('Create BOM error:', error)
         res.status(500).json({ success: false, message: error.message })
     }

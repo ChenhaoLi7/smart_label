@@ -1,10 +1,10 @@
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
+const config = require('../config/config')
 
 // JWS配置
 const JWS_CONFIG = {
-  // 生产环境应该从环境变量获取
-  SECRET: process.env.JWT_SECRET || 'smart-warehouse-2024-secret-key-change-in-production',
+  SECRET: config.jwt.labelSecret,
   ALGORITHM: 'HS256',
   ISSUER: 'smart-warehouse',
   AUDIENCE: 'warehouse-operations'
@@ -193,4 +193,3 @@ module.exports = {
   generatePickingTaskJWS,
   generateReceivingTaskJWS
 }
-

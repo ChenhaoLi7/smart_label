@@ -31,6 +31,11 @@ const Item = sequelize.define('Item', {
     defaultValue: 'pcs',
     comment: '计量单位'
   },
+  price: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+    comment: '参考单价'
+  },
   min_stock: {
     type: DataTypes.INTEGER,
     defaultValue: 0,
@@ -60,4 +65,3 @@ const Item = sequelize.define('Item', {
 })
 
 module.exports = Item
-

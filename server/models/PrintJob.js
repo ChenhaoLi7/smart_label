@@ -56,6 +56,10 @@ const PrintJob = sequelize.define('PrintJob', {
     type: DataTypes.STRING(500),
     comment: '输出文件路径'
   },
+  request_payload: {
+    type: DataTypes.TEXT('long'),
+    comment: '打印请求快照(JSON)'
+  },
   error_message: {
     type: DataTypes.TEXT,
     comment: '错误信息'
@@ -75,4 +79,3 @@ const PrintJob = sequelize.define('PrintJob', {
 })
 
 module.exports = PrintJob
-

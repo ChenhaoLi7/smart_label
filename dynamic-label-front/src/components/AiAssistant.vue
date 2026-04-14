@@ -1,137 +1,259 @@
 <template>
-  <div class="ai-assistant">
-    <!-- 顶部导航栏 -->
-    <div class="nav-header">
-      <div class="nav-content">
-        <div class="nav-left">
-          <button @click="goBack" class="back-btn">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M19 12H5M12 19l-7-7 7-7"/>
-            </svg>
-          </button>
-          <div class="logo">
-            <div class="logo-icon">🤖</div>
-            <span class="logo-text">AI智能助手</span>
-          </div>
-        </div>
-        <div class="nav-right">
-          <span class="status-badge" :class="{ 'connected': isConnected }">
-            {{ isConnected ? '已连接' : '未配置' }}
-          </span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 主聊天区域 -->
-    <div class="chat-container" ref="chatContainer">
-      <div class="welcome-message" v-if="messages.length === 0">
-        <div class="bot-avatar large">🤖</div>
-        <h2>你好！我是您的智能库存助手</h2>
-        <p>您可以问我任何关于库存、商品或订单的问题。例如：</p>
-        <div class="suggestion-grid">
-          <button v-for="s in suggestions" :key="s" @click="useSuggestion(s)" class="suggestion-chip">
-            {{ s }}
-          </button>
-        </div>
-      </div>
-
-      <div v-for="(msg, index) in messages" :key="index" :class="['message', msg.role]">
-        <div class="message-meta">
-          <div class="bot-avatar" v-if="msg.role === 'assistant'">🤖</div>
-          <div class="user-avatar" v-else>👤</div>
-        </div>
-        <div class="message-content">
-          <div class="text">{{ msg.content }}</div>
-          
-          <!-- SQL 预览 -->
-          <div v-if="msg.sql" class="sql-preview">
-            <div class="sql-header">
-              <span>生成的 SQL</span>
-              <button @click="copySql(msg.sql)" class="copy-btn">复制</button>
-            </div>
-            <code>{{ msg.sql }}</code>
-          </div>
-
-          <!-- 数据表格 -->
-          <div v-if="msg.data && msg.data.length > 0" class="data-result">
-            <div class="result-header">
-              <span>查询结果 ({{ msg.data.length }} 条)</span>
-            </div>
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th v-for="key in Object.keys(msg.data[0])" :key="key">{{ key }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, rIndex) in msg.data" :key="rIndex">
-                    <td v-for="key in Object.keys(row)" :key="key">{{ row[key] }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div v-else-if="msg.data && msg.data.length === 0" class="no-data">
-            未找到匹配的数据
-          </div>
-        </div>
-      </div>
-
-      <div v-if="loading" class="message assistant loading">
-        <div class="bot-avatar">🤖</div>
-        <div class="loading-dots">
-          <span></span><span></span><span></span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 输入区 -->
-    <div class="input-area">
-      <div class="input-wrapper">
-        <textarea 
-          v-model="userInput" 
-          @keydown.enter.prevent="sendMessage"
-          placeholder="输入您的指令，例如：查询库存最少的前5个商品..."
-          rows="1"
-          ref="inputField"
-        ></textarea>
-        <button @click="sendMessage" :disabled="!userInput.trim() || loading" class="send-btn">
+  <div class="copilot-page">
+    <header class="topbar glass-panel">
+      <div class="topbar-left">
+        <button @click="goBack" class="back-btn" aria-label="Go back">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+            <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
+        <div>
+          <p class="eyebrow">Warehouse Copilot</p>
+          <h1>AI Assistant</h1>
+        </div>
       </div>
-      <p class="disclaimer">AI 可能会产生错误，请核对重要数据。</p>
-    </div>
+      <div class="topbar-right">
+        <span class="mode-pill">Read-only Agent</span>
+        <span :class="['status-pill', isConnected ? 'connected' : 'offline']">
+          {{ isConnected ? 'Connected' : 'Offline' }}
+        </span>
+      </div>
+    </header>
+
+    <main class="page-body">
+      <section class="hero-panel glass-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Operations Copilot</p>
+          <h2>Ask what matters, inspect the signal, and decide the next move with confidence.</h2>
+          <p class="hero-text">
+            This assistant now runs in a safe, read-only agent mode. It plans the request, calls approved warehouse tools,
+            and returns structured answers instead of raw SQL.
+          </p>
+          <div class="chip-row">
+            <button
+              v-for="prompt in suggestionPrompts"
+              :key="prompt"
+              @click="useSuggestion(prompt)"
+              class="prompt-chip"
+            >
+              {{ prompt }}
+            </button>
+          </div>
+        </div>
+        <div class="hero-metrics">
+          <article v-for="metric in contextMetrics" :key="metric.label" :class="['metric-card', metric.tone]">
+            <span>{{ metric.label }}</span>
+            <strong>{{ metric.value }}</strong>
+          </article>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <section class="conversation-panel glass-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Conversation</p>
+              <h3>Planning, tools, and results</h3>
+            </div>
+            <p class="panel-note">The assistant can inspect stock health, lots, bins, recent activity, and suggestions.</p>
+          </div>
+
+          <div class="thread" ref="chatContainer">
+            <div v-if="messages.length === 0" class="empty-thread">
+              <div class="empty-orb">◎</div>
+              <h4>Start with a warehouse question.</h4>
+              <p>Try a quick stock overview, an expiry review, a bin lookup, or a suggestion summary.</p>
+            </div>
+
+            <article v-for="(msg, index) in messages" :key="index" :class="['message', msg.role]">
+              <div class="avatar">{{ msg.role === 'assistant' ? 'AI' : 'You' }}</div>
+              <div class="message-card">
+                <div class="message-text">{{ msg.content }}</div>
+
+                <div v-if="msg.plan?.length" class="section-card">
+                  <div class="section-head">
+                    <p class="eyebrow">Plan</p>
+                    <span>{{ msg.intentLabel || 'Agent plan' }}</span>
+                  </div>
+                  <ol class="plan-list">
+                    <li v-for="step in msg.plan" :key="step">{{ step }}</li>
+                  </ol>
+                </div>
+
+                <div v-if="msg.toolCalls?.length" class="section-card">
+                  <div class="section-head">
+                    <p class="eyebrow">Tool Calls</p>
+                    <span>{{ msg.toolCalls.length }} completed</span>
+                  </div>
+                  <div class="tool-grid">
+                    <article v-for="tool in msg.toolCalls" :key="tool.name" class="tool-card">
+                      <strong>{{ tool.label }}</strong>
+                      <p>{{ tool.summary }}</p>
+                    </article>
+                  </div>
+                </div>
+
+                <div v-if="msg.metrics?.length" class="metric-grid">
+                  <article v-for="metric in msg.metrics" :key="`${msg.content}-${metric.label}`" :class="['metric-card', metric.tone]">
+                    <span>{{ metric.label }}</span>
+                    <strong>{{ metric.value }}</strong>
+                  </article>
+                </div>
+
+                <div v-for="table in msg.tables || []" :key="table.title" class="section-card">
+                  <div class="section-head">
+                    <p class="eyebrow">Result</p>
+                    <span>{{ table.title }}</span>
+                  </div>
+                  <div class="table-shell">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th v-for="column in table.columns" :key="column">{{ column }}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-if="!table.rows?.length">
+                          <td :colspan="table.columns.length">No rows returned</td>
+                        </tr>
+                        <tr v-for="(row, rowIndex) in table.rows" :key="`${table.title}-${rowIndex}`">
+                          <td v-for="(cell, cellIndex) in row" :key="`${table.title}-${rowIndex}-${cellIndex}`">{{ cell }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div v-if="msg.nextActions?.length" class="section-card">
+                  <div class="section-head">
+                    <p class="eyebrow">Next Actions</p>
+                    <span>Suggested follow-up</span>
+                  </div>
+                  <div class="action-list">
+                    <div v-for="action in msg.nextActions" :key="action" class="action-item">
+                      {{ action }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article v-if="loading" class="message assistant">
+              <div class="avatar">AI</div>
+              <div class="message-card loading-card">
+                <span></span><span></span><span></span>
+              </div>
+            </article>
+          </div>
+
+          <div class="composer">
+            <textarea
+              ref="inputField"
+              v-model="userInput"
+              class="composer-input"
+              placeholder="Ask for an overview, low-stock review, expiry watch, bin status, or item lookup..."
+              rows="1"
+              @input="autoResize"
+              @keydown.enter.exact.prevent="sendMessage"
+            ></textarea>
+            <button @click="sendMessage" :disabled="!userInput.trim() || loading" class="send-btn">
+              Send
+            </button>
+          </div>
+          <p class="composer-note">Read-only mode: the agent can inspect data and recommend actions, but it will not change stock directly.</p>
+        </section>
+
+        <aside class="context-panel">
+          <section class="context-card glass-panel">
+            <p class="eyebrow">Agent Mode</p>
+            <h3>Safe warehouse reasoning</h3>
+            <p>
+              The assistant now works as a tool-driven copilot. It builds a short plan, calls approved warehouse tools,
+              and returns structured summaries instead of raw SQL.
+            </p>
+          </section>
+
+          <section class="context-card glass-panel">
+            <p class="eyebrow">Capabilities</p>
+            <div class="capability-list">
+              <article v-for="capability in capabilities" :key="capability.name" class="capability-item">
+                <strong>{{ capability.name }}</strong>
+                <p>{{ capability.description }}</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="context-card glass-panel">
+            <p class="eyebrow">Quick Start</p>
+            <div class="action-list">
+              <button
+                v-for="prompt in suggestionPrompts"
+                :key="`side-${prompt}`"
+                class="action-item action-button"
+                @click="useSuggestion(prompt)"
+              >
+                {{ prompt }}
+              </button>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </main>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
 const userInput = ref('')
 const loading = ref(false)
-const isConnected = ref(true)
+const isConnected = ref(false)
 const chatContainer = ref(null)
 const inputField = ref(null)
 const messages = ref([])
+const capabilities = ref([])
+const contextMetrics = ref([
+  { label: 'Tracked Items', value: '—', tone: 'blue' },
+  { label: 'Live Lots', value: '—', tone: 'violet' },
+  { label: 'Active Bins', value: '—', tone: 'teal' },
+  { label: 'Utilization', value: '—', tone: 'slate' }
+])
 
-const suggestions = [
-  '查看所有状态为 low_stock 的商品',
-  '最近一周的交易记录有哪些',
-  '库存总价值是多少',
-  '哪个分类的商品最多',
-  '显示所有操作员'
+const suggestionPrompts = [
+  'Give me a warehouse overview.',
+  'Show me low-stock items.',
+  'Which lots expire soon?',
+  'Review recent warehouse activity.',
+  'Check refrigerator bin status.'
 ]
+
+const intentLabels = {
+  overview: 'Overview',
+  low_stock_review: 'Low-stock review',
+  expiry_watch: 'Expiry watch',
+  recent_activity: 'Recent activity',
+  item_lookup: 'Item lookup',
+  bin_lookup: 'Bin review',
+  suggestion_watch: 'Suggestion watch'
+}
 
 const goBack = () => router.back()
 
-const useSuggestion = (s) => {
-  userInput.value = s
-  sendMessage()
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('token')
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`
+  }
+}
+
+const autoResize = (event) => {
+  const target = event?.target || inputField.value
+  if (!target) return
+  target.style.height = 'auto'
+  target.style.height = `${Math.min(target.scrollHeight, 180)}px`
 }
 
 const scrollToBottom = async () => {
@@ -141,54 +263,89 @@ const scrollToBottom = async () => {
   }
 }
 
-const copySql = (sql) => {
-  navigator.clipboard.writeText(sql)
-  alert('SQL 已复制到剪贴板')
+const useSuggestion = (prompt) => {
+  userInput.value = prompt
+  nextTick(() => {
+    autoResize()
+    sendMessage()
+  })
+}
+
+const loadContext = async () => {
+  try {
+    const response = await fetch('/api/ai/context', { headers: getAuthHeaders() })
+    const result = await response.json()
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Failed to load agent context')
+    }
+
+    isConnected.value = true
+    capabilities.value = result.capabilities || []
+    contextMetrics.value = result.metrics || contextMetrics.value
+  } catch (error) {
+    console.error('Failed to load AI context:', error)
+    isConnected.value = false
+    capabilities.value = [
+      {
+        name: 'Connection issue',
+        description: 'The copilot could not load its live warehouse context. Check the backend service and token.'
+      }
+    ]
+  }
+}
+
+const pushAssistantMessage = (payload) => {
+  messages.value.push({
+    role: 'assistant',
+    content: payload.answer || payload.message || 'The agent completed the request.',
+    plan: payload.plan || [],
+    toolCalls: payload.toolCalls || [],
+    metrics: payload.metrics || [],
+    tables: payload.tables || [],
+    nextActions: payload.nextActions || [],
+    intentLabel: intentLabels[payload.intent] || 'Agent response'
+  })
 }
 
 const sendMessage = async () => {
-  if (!userInput.value.trim() || loading.value) return
+  const prompt = userInput.value.trim()
+  if (!prompt || loading.value) return
 
-  const userQuery = userInput.value
   messages.value.push({
     role: 'user',
-    content: userQuery
+    content: prompt
   })
-  
+
   userInput.value = ''
   loading.value = true
+  if (inputField.value) {
+    inputField.value.style.height = 'auto'
+  }
   await scrollToBottom()
 
   try {
-    const token = localStorage.getItem('token')
     const response = await fetch('/api/ai/query', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({ prompt: userQuery })
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ prompt })
     })
 
     const result = await response.json()
 
-    if (response.ok) {
-      messages.value.push({
-        role: 'assistant',
-        content: `我为您查询到了相关数据。`,
-        sql: result.sql,
-        data: result.data
-      })
-    } else {
-      messages.value.push({
-        role: 'assistant',
-        content: `抱歉，处理您的请求时出错了：${result.message || '未知错误'}`
-      })
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'The agent could not complete this request.')
     }
+
+    pushAssistantMessage(result)
   } catch (error) {
-    messages.value.push({
-      role: 'assistant',
-      content: `由于网络问题，查询失败。请确保后端服务正常运行。`
+    pushAssistantMessage({
+      message: error.message || 'The agent is temporarily unavailable.',
+      plan: [],
+      toolCalls: [],
+      metrics: [],
+      tables: [],
+      nextActions: ['Check the backend service and try again in a moment.']
     })
   } finally {
     loading.value = false
@@ -196,305 +353,407 @@ const sendMessage = async () => {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadContext()
   inputField.value?.focus()
 })
 </script>
 
 <style scoped>
-.ai-assistant {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+.copilot-page {
+  min-height: 100vh;
+  padding: 20px;
+  background:
+    radial-gradient(circle at top left, rgba(191, 219, 254, 0.72), transparent 32%),
+    radial-gradient(circle at top right, rgba(167, 243, 208, 0.56), transparent 28%),
+    linear-gradient(180deg, #f6f8fc 0%, #eef2f8 100%);
+  color: #0f172a;
 }
 
-/* Nav Header */
-.nav-header {
-  height: 64px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid var(--glass-border);
-  display: flex;
-  align-items: center;
-  z-index: 10;
+.glass-panel {
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 24px 50px rgba(15, 23, 42, 0.08);
 }
 
-.nav-content {
-  max-width: 1200px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 0 20px;
+.topbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 18px;
+  padding: 18px 22px;
+  border-radius: 28px;
 }
 
-.nav-left {
+.topbar-left,
+.topbar-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
 .back-btn {
-  background: none;
+  width: 42px;
+  height: 42px;
   border: none;
-  color: var(--text-primary);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.04);
+  color: #0f172a;
   cursor: pointer;
-  padding: 8px;
-  border-radius: 50%;
-  transition: background 0.2s;
 }
 
-.back-btn:hover {
-  background: var(--input-bg);
+.eyebrow {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #64748b;
 }
 
-.logo {
-  display: flex;
+.topbar h1,
+.hero-copy h2,
+.panel-head h3,
+.context-card h3 {
+  margin: 0;
+  letter-spacing: -0.04em;
+}
+
+.mode-pill,
+.status-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-}
-
-.logo-icon { font-size: 24px; }
-.logo-text { font-weight: 600; font-size: 18px; }
-
-.status-badge {
+  padding: 8px 12px;
+  border-radius: 999px;
   font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 12px;
-  background: var(--input-bg);
-  color: var(--text-secondary);
+  font-weight: 700;
 }
 
-.status-badge.connected {
-  background: rgba(52, 199, 89, 0.1);
-  color: #34c759;
+.mode-pill {
+  background: rgba(15, 23, 42, 0.06);
 }
 
-/* Chat Area */
-.chat-container {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  max-width: 900px;
-  width: 100%;
-  margin: 0 auto;
+.status-pill.connected {
+  background: rgba(52, 211, 153, 0.14);
+  color: #047857;
 }
 
-.welcome-message {
-  text-align: center;
-  padding: 60px 20px;
-  opacity: 0.9;
+.status-pill.offline {
+  background: rgba(248, 113, 113, 0.14);
+  color: #b91c1c;
 }
 
-.bot-avatar.large {
-  font-size: 64px;
-  margin-bottom: 20px;
+.page-body {
+  margin-top: 20px;
+  display: grid;
+  gap: 20px;
 }
 
-.suggestion-grid {
+.hero-panel {
+  display: grid;
+  grid-template-columns: 1.3fr 0.9fr;
+  gap: 20px;
+  padding: 28px;
+  border-radius: 34px;
+}
+
+.hero-copy {
+  display: grid;
+  gap: 16px;
+}
+
+.hero-text {
+  margin: 0;
+  max-width: 700px;
+  color: #475569;
+  line-height: 1.7;
+}
+
+.chip-row {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 10px;
-  margin-top: 24px;
 }
 
-.suggestion-chip {
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  padding: 10px 16px;
-  border-radius: 20px;
-  font-size: 14px;
+.prompt-chip {
+  padding: 11px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.14);
+  background: rgba(255, 255, 255, 0.84);
+  color: #0f172a;
   cursor: pointer;
-  transition: all 0.2s;
-  color: var(--text-primary);
 }
 
-.suggestion-chip:hover {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
-  color: white;
-}
-
-/* Messages */
-.message {
-  display: flex;
+.hero-metrics,
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  max-width: 90%;
 }
 
-.message.user {
-  align-self: flex-end;
-  flex-direction: row-reverse;
+.metric-card {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  background: rgba(255, 255, 255, 0.78);
 }
 
-.message.assistant {
-  align-self: flex-start;
+.metric-card span {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
 }
 
-.bot-avatar, .user-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--glass-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  flex-shrink: 0;
+.metric-card strong {
+  font-size: 28px;
+  letter-spacing: -0.05em;
 }
 
-.message-content {
-  background: var(--glass-bg);
-  padding: 12px 16px;
-  border-radius: 18px;
-  border: 1px solid var(--glass-border);
+.metric-card.blue { background: linear-gradient(180deg, rgba(219, 234, 254, 0.74), rgba(255, 255, 255, 0.88)); }
+.metric-card.violet { background: linear-gradient(180deg, rgba(237, 233, 254, 0.74), rgba(255, 255, 255, 0.88)); }
+.metric-card.teal { background: linear-gradient(180deg, rgba(204, 251, 241, 0.74), rgba(255, 255, 255, 0.88)); }
+.metric-card.slate { background: linear-gradient(180deg, rgba(226, 232, 240, 0.74), rgba(255, 255, 255, 0.88)); }
+.metric-card.amber { background: linear-gradient(180deg, rgba(254, 243, 199, 0.74), rgba(255, 255, 255, 0.88)); }
+.metric-card.mint { background: linear-gradient(180deg, rgba(220, 252, 231, 0.74), rgba(255, 255, 255, 0.88)); }
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.7fr);
+  gap: 20px;
+  align-items: start;
 }
 
-.message.user .message-content {
-  background: var(--accent-blue);
-  color: white;
-  border-bottom-right-radius: 4px;
+.conversation-panel,
+.context-card {
+  border-radius: 30px;
 }
 
-.message.assistant .message-content {
-  border-bottom-left-radius: 4px;
+.conversation-panel {
+  padding: 24px;
+  display: grid;
+  gap: 18px;
 }
 
-/* SQL Preview */
-.sql-preview {
-  margin-top: 12px;
-  background: rgba(0,0,0,0.8);
-  border-radius: 8px;
-  overflow: hidden;
-  font-size: 13px;
-}
-
-.sql-header {
-  padding: 6px 12px;
-  background: rgba(255,255,255,0.1);
+.panel-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  color: rgba(255,255,255,0.6);
+  gap: 16px;
+  align-items: flex-start;
 }
 
-.copy-btn {
-  background: none;
-  border: none;
-  color: #0A84FF;
-  cursor: pointer;
+.panel-note,
+.context-card p,
+.capability-item p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.thread {
+  max-height: 62vh;
+  overflow-y: auto;
+  display: grid;
+  gap: 16px;
+  padding-right: 4px;
+}
+
+.empty-thread {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 48px 20px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.empty-orb {
+  width: 72px;
+  height: 72px;
+  border-radius: 24px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, rgba(191, 219, 254, 0.92), rgba(255, 255, 255, 0.96));
+  font-size: 28px;
+}
+
+.message {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.avatar {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.08);
   font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
 }
 
-.sql-preview code {
-  display: block;
-  padding: 12px;
-  color: #fff;
+.message.user .avatar {
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+}
+
+.message.assistant .avatar {
+  background: rgba(15, 23, 42, 0.1);
+}
+
+.message-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.message.user .message-card {
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.88), rgba(255, 255, 255, 0.92));
+}
+
+.message-text {
   white-space: pre-wrap;
-  font-family: "SF Mono", Menlo, monospace;
+  line-height: 1.7;
 }
 
-/* Data Result Table */
-.data-result {
-  margin-top: 12px;
-  border: 1px solid var(--glass-border);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--bg-primary);
+.section-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(248, 250, 252, 0.92);
 }
 
-.result-header {
-  padding: 8px 12px;
-  background: rgba(0,0,0,0.02);
-  font-size: 13px;
-  font-weight: 600;
-  border-bottom: 1px solid var(--glass-border);
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
 }
 
-.table-wrapper {
+.section-head span {
+  font-size: 12px;
+  color: #475569;
+}
+
+.plan-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: #0f172a;
+}
+
+.tool-grid,
+.capability-list {
+  display: grid;
+  gap: 12px;
+}
+
+.tool-card,
+.capability-item {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.05);
+}
+
+.tool-card strong,
+.capability-item strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.table-shell {
   overflow-x: auto;
-  max-height: 400px;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+}
+
+th,
+td {
+  padding: 12px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  font-size: 14px;
 }
 
 th {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.action-list {
+  display: grid;
+  gap: 10px;
+}
+
+.action-item {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.05);
+  line-height: 1.6;
+}
+
+.action-button {
   text-align: left;
-  padding: 10px;
-  background: rgba(0,0,0,0.03);
-  position: sticky;
-  top: 0;
+  cursor: pointer;
+  color: #0f172a;
 }
 
-td {
-  padding: 10px;
-  border-top: 1px solid var(--glass-border);
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
 }
 
-/* Input Area */
-.input-area {
-  padding: 20px;
-  background: var(--bg-primary);
-  border-top: 1px solid var(--glass-border);
-}
-
-.input-wrapper {
-  max-width: 900px;
-  margin: 0 auto;
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: 24px;
-  padding: 8px 16px;
-  transition: border-color 0.2s;
-}
-
-.input-wrapper:focus-within {
-  border-color: var(--accent-blue);
-}
-
-textarea {
-  flex: 1;
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  padding: 10px 0;
+.composer-input {
+  min-height: 58px;
+  max-height: 180px;
   resize: none;
-  font-family: inherit;
-  font-size: 15px;
+  padding: 16px 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  font: inherit;
+  color: #0f172a;
+}
+
+.composer-input:focus {
   outline: none;
-  max-height: 200px;
+  border-color: rgba(59, 130, 246, 0.32);
+  box-shadow: 0 0 0 4px rgba(191, 219, 254, 0.38);
 }
 
 .send-btn {
-  background: var(--accent-blue);
-  color: white;
+  height: 58px;
+  padding: 0 22px;
   border: none;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  border-radius: 20px;
+  background: linear-gradient(180deg, #0f172a, #1e293b);
+  color: white;
+  font-weight: 700;
   cursor: pointer;
-  margin-left: 10px;
-  margin-bottom: 2px;
-  transition: opacity 0.2s;
 }
 
 .send-btn:disabled {
@@ -502,33 +761,94 @@ textarea {
   cursor: not-allowed;
 }
 
-.disclaimer {
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-top: 10px;
+.composer-note {
+  margin: -4px 0 0;
+  color: #64748b;
+  font-size: 12px;
 }
 
-/* Loading Animation */
-.loading-dots {
+.context-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.context-card {
+  padding: 22px;
+}
+
+.loading-card {
   display: flex;
-  gap: 4px;
-  padding: 10px;
+  gap: 8px;
+  align-items: center;
 }
 
-.loading-dots span {
-  width: 8px;
-  height: 8px;
-  background: var(--text-secondary);
-  border-radius: 50%;
-  animation: bounce 1.4s infinite ease-in-out both;
+.loading-card span {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #94a3b8;
+  animation: pulse 1.1s infinite ease-in-out;
 }
 
-.loading-dots span:nth-child(1) { animation-delay: -0.32s; }
-.loading-dots span:nth-child(2) { animation-delay: -0.16s; }
+.loading-card span:nth-child(2) {
+  animation-delay: 0.15s;
+}
 
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0); }
-  40% { transform: scale(1); }
+.loading-card span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes pulse {
+  0%, 80%, 100% { opacity: 0.35; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 1100px) {
+  .hero-panel,
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .copilot-page {
+    padding: 14px;
+  }
+
+  .topbar,
+  .hero-panel,
+  .conversation-panel,
+  .context-card {
+    border-radius: 24px;
+  }
+
+  .topbar,
+  .panel-head,
+  .topbar-right {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero-metrics,
+  .metric-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .message {
+    grid-template-columns: 1fr;
+  }
+
+  .avatar {
+    width: 38px;
+    height: 38px;
+  }
+
+  .composer {
+    grid-template-columns: 1fr;
+  }
+
+  .send-btn {
+    width: 100%;
+  }
 }
 </style>

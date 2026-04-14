@@ -1,367 +1,521 @@
 <template>
   <div class="print-center">
-    <!-- 顶部标题栏 -->
-    <div class="header">
-      <h1>🖨️ 打印中心</h1>
-      <div class="header-actions">
-        <button @click="refreshTemplates" class="btn btn-primary">
-          🔄 刷新模板
+    <section class="hero-card">
+      <div class="hero-copy">
+        <p class="eyebrow">Label Operations</p>
+        <h1>Print Center</h1>
+        <p class="hero-text">
+          Choose a format, select the right records, and generate clean warehouse labels that feel ready for real operations.
+        </p>
+        <div class="hero-metrics">
+          <div class="hero-metric">
+            <span>Templates</span>
+            <strong>{{ templates.length }}</strong>
+          </div>
+          <div class="hero-metric">
+            <span>Live Lots</span>
+            <strong>{{ lots.length }}</strong>
+          </div>
+          <div class="hero-metric">
+            <span>Bins</span>
+            <strong>{{ bins.length }}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-actions">
+        <button class="ghost-btn" @click="goBack">
+          Back
         </button>
-        <button @click="viewPrintHistory" class="btn btn-info">
-          📋 打印历史
+        <button class="ghost-btn" @click="refreshWorkspace" :disabled="workspaceBusy">
+          {{ workspaceBusy ? 'Refreshing...' : 'Refresh Data' }}
+        </button>
+        <button class="primary-btn" @click="viewPrintHistory" :disabled="loadingJobs">
+          {{ loadingJobs ? 'Loading History...' : 'Print History' }}
         </button>
       </div>
+    </section>
+
+    <div v-if="workspaceBusy" class="inline-banner info">
+      <strong>Syncing workspace</strong>
+      <span>Refreshing templates, inventory sources, and print job snapshots.</span>
     </div>
 
-    <!-- 主要内容区域 -->
-    <div class="main-content">
-      <!-- 左侧：模板选择 -->
-      <div class="left-panel">
-        <div class="panel-section">
-          <h3>📋 选择模板</h3>
-          <div class="template-list">
-            <div 
-              v-for="template in templates" 
-              :key="template.id"
-              @click="selectTemplate(template)"
-              :class="['template-item', { active: selectedTemplate?.id === template.id }]"
+    <div v-else-if="hasLoadErrors" class="inline-banner error">
+      <strong>Some data could not be loaded</strong>
+      <span>{{ loadErrorSummary }}</span>
+    </div>
+
+    <div v-if="notice.visible" class="inline-banner" :class="notice.type">
+      <div class="notice-copy">
+        <strong>{{ notice.title }}</strong>
+        <span>{{ notice.message }}</span>
+      </div>
+      <button class="notice-close" @click="notice.visible = false">Dismiss</button>
+    </div>
+
+    <div class="print-layout">
+      <aside class="workspace-panel template-panel">
+        <div class="panel-topline">
+          <div>
+            <p class="panel-eyebrow">Step 1</p>
+            <h2>Choose A Label Format</h2>
+          </div>
+          <span class="panel-meta">{{ templates.length }} available</span>
+        </div>
+
+        <div v-if="loadingTemplates" class="empty-state">
+          <strong>Loading templates...</strong>
+          <span>Pulling the latest formats from the print library.</span>
+        </div>
+
+        <div v-else-if="templates.length === 0" class="empty-state">
+          <strong>No templates found</strong>
+          <span>{{ loadErrors.templates || 'Create or restore templates before printing.' }}</span>
+        </div>
+
+        <div v-else class="template-grid">
+          <button
+            v-for="template in templates"
+            :key="template.id"
+            type="button"
+            class="template-card"
+            :class="{ active: selectedTemplate?.id === template.id }"
+            @click="selectTemplate(template)"
+          >
+            <div class="template-card-top">
+              <div class="template-badge">{{ templateIcon(template) }}</div>
+              <div class="template-size-pill">
+                {{ template.size.width }}×{{ template.size.height }}{{ template.size.unit }}
+              </div>
+            </div>
+
+            <div class="template-card-copy">
+              <strong>{{ templateDisplayName(template) }}</strong>
+              <p>{{ templateDisplayDescription(template) }}</p>
+            </div>
+
+            <div class="template-support">
+              <span
+                v-for="type in template.printTypes"
+                :key="`${template.id}-${type}`"
+                class="support-pill"
+              >
+                {{ printTypeLabel(type) }}
+              </span>
+            </div>
+          </button>
+        </div>
+
+        <div class="template-detail-card" v-if="selectedTemplate">
+          <div class="panel-topline compact">
+            <div>
+              <p class="panel-eyebrow">Template Snapshot</p>
+              <h3>{{ templateDisplayName(selectedTemplate) }}</h3>
+            </div>
+            <span class="detail-size">
+              {{ selectedTemplate.size.width }}×{{ selectedTemplate.size.height }}{{ selectedTemplate.size.unit }}
+            </span>
+          </div>
+
+          <p class="template-detail-copy">{{ templateDisplayDescription(selectedTemplate) }}</p>
+
+          <div class="detail-row">
+            <span>Supported Prints</span>
+            <div class="detail-pills">
+              <span
+                v-for="type in selectedTemplate.printTypes"
+                :key="`supported-${type}`"
+                class="support-pill"
+              >
+                {{ printTypeLabel(type) }}
+              </span>
+            </div>
+          </div>
+
+          <div class="detail-row">
+            <span>Dynamic Fields</span>
+            <div class="detail-pills">
+              <span
+                v-for="placeholder in selectedTemplate.placeholders"
+                :key="placeholder"
+                class="field-pill"
+              >
+                {{ placeholder }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="workspace-panel source-panel">
+        <div class="panel-topline">
+          <div>
+            <p class="panel-eyebrow">Step 2</p>
+            <h2>Select What To Print</h2>
+          </div>
+          <span class="panel-meta">{{ currentSourceItems.length }} shown</span>
+        </div>
+
+        <div v-if="!selectedTemplate" class="empty-state large">
+          <strong>Choose a template first</strong>
+          <span>Once a format is selected, the source list and print actions will unlock automatically.</span>
+        </div>
+
+        <template v-else>
+          <div class="type-switcher">
+            <button
+              v-for="type in availablePrintTypes"
+              :key="type"
+              type="button"
+              class="type-chip"
+              :class="{ active: printType === type }"
+              @click="printType = type"
             >
-              <div class="template-icon">🏷️</div>
-              <div class="template-info">
-                <div class="template-name">{{ template.name }}</div>
-                <div class="template-desc">{{ template.description }}</div>
-                <div class="template-size">{{ template.size.width }}×{{ template.size.height }}{{ template.size.unit }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel-section">
-          <h3>📊 模板信息</h3>
-          <div v-if="selectedTemplate" class="template-details">
-            <div class="detail-item">
-              <span class="label">模板ID:</span>
-              <span class="value">{{ selectedTemplate.id }}</span>
-            </div>
-            <div class="detail-item">
-              <span class="label">尺寸:</span>
-              <span class="value">{{ selectedTemplate.size.width }}×{{ selectedTemplate.size.height }}{{ selectedTemplate.size.unit }}</span>
-            </div>
-            <div class="detail-item">
-              <span class="label">占位符:</span>
-              <div class="placeholders">
-                <span 
-                  v-for="placeholder in selectedTemplate.placeholders" 
-                  :key="placeholder"
-                  class="placeholder-tag"
-                >
-                  {{ placeholder }}
-                </span>
-              </div>
-            </div>
-          </div>
-          <div v-else class="no-selection">
-            请选择一个模板
-          </div>
-        </div>
-      </div>
-
-      <!-- 中间：数据源选择 -->
-      <div class="center-panel">
-        <div class="panel-section">
-          <h3>📦 选择数据源</h3>
-          
-          <!-- 打印类型选择 -->
-          <div class="print-type-selector">
-            <label class="radio-label">
-              <input 
-                type="radio" 
-                v-model="printType" 
-                value="LOT" 
-                :disabled="!selectedTemplate || !selectedTemplate.printTypes.includes('LOT')"
-              >
-              <span class="radio-text">批次标签 (LOT)</span>
-            </label>
-            <label class="radio-label">
-              <input 
-                type="radio" 
-                v-model="printType" 
-                value="BIN" 
-                :disabled="!selectedTemplate || !selectedTemplate.printTypes.includes('BIN')"
-              >
-              <span class="radio-text">库位标签 (BIN)</span>
-            </label>
-            <label class="radio-label">
-              <input 
-                type="radio" 
-                v-model="printType" 
-                value="ITEM" 
-                :disabled="!selectedTemplate || !selectedTemplate.printTypes.includes('ITEM')"
-              >
-              <span class="radio-text">物料标签 (ITEM)</span>
-            </label>
+              <span>{{ printTypeIcon(type) }}</span>
+              {{ printTypeLabel(type) }}
+            </button>
           </div>
 
-          <!-- 数据源选择 -->
-          <div v-if="printType" class="data-source-selector">
-            <div class="source-tabs">
-              <button 
-                v-for="tab in dataSourceTabs" 
-                :key="tab.key"
-                @click="activeDataSourceTab = tab.key"
-                :class="['tab-btn', { active: activeDataSourceTab === tab.key }]"
+          <div class="source-tabs" v-if="visibleSourceTabs.length > 1">
+            <button
+              v-for="tab in visibleSourceTabs"
+              :key="tab.key"
+              type="button"
+              class="source-tab"
+              :class="{ active: activeDataSourceTab === tab.key }"
+              @click="activeDataSourceTab = tab.key"
+            >
+              <strong>{{ tab.label }}</strong>
+              <span>{{ tab.subtitle }}</span>
+            </button>
+          </div>
+
+          <div class="source-toolbar" v-if="activeDataSourceTab">
+            <div class="search-shell">
+              <input
+                v-model="currentSearchQuery"
+                :placeholder="currentSearchPlaceholder"
+                class="search-input"
               >
-                {{ tab.label }}
+            </div>
+
+            <div class="toolbar-actions">
+              <button class="ghost-btn small" @click="toggleSelectAllCurrentSource" :disabled="currentSourceItems.length === 0">
+                {{ allCurrentSourceSelected ? 'Clear Visible' : 'Select Visible' }}
               </button>
-            </div>
-
-            <!-- 采购订单数据 -->
-            <div v-if="activeDataSourceTab === 'po'" class="data-content">
-              <div class="search-bar">
-                <input 
-                  v-model="poSearchQuery" 
-                  placeholder="搜索采购订单号或SKU..." 
-                  class="search-input"
-                >
-                <button @click="searchPO" class="btn btn-primary">搜索</button>
-              </div>
-              
-              <div class="data-table-container">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th><input type="checkbox" @change="toggleAllPO" v-model="selectAllPO"></th>
-                      <th>PO号</th>
-                      <th>SKU</th>
-                      <th>商品名称</th>
-                      <th>数量</th>
-                      <th>状态</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="poLine in filteredPOLines" :key="poLine.id">
-                      <td>
-                        <input 
-                          type="checkbox" 
-                          v-model="selectedPOItems" 
-                          :value="poLine.id"
-                        >
-                      </td>
-                      <td>{{ poLine.po_number }}</td>
-                      <td>{{ poLine.sku }}</td>
-                      <td>{{ poLine.item_name }}</td>
-                      <td>{{ poLine.qty }} {{ poLine.uom }}</td>
-                      <td>
-                        <span :class="['status-badge', poLine.status]">
-                          {{ getPOStatusText(poLine.status) }}
-                        </span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <!-- 批次数据 -->
-            <div v-if="activeDataSourceTab === 'lots'" class="data-content">
-              <div class="search-bar">
-                <input 
-                  v-model="lotSearchQuery" 
-                  placeholder="搜索批次号或SKU..." 
-                  class="search-input"
-                >
-                <button @click="searchLots" class="btn btn-primary">搜索</button>
-              </div>
-              
-              <div class="data-table-container">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th><input type="checkbox" @change="toggleAllLots" v-model="selectAllLots"></th>
-                      <th>批次号</th>
-                      <th>SKU</th>
-                      <th>数量</th>
-                      <th>库位</th>
-                      <th>过期时间</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="lot in filteredLots" :key="lot.id">
-                      <td>
-                        <input 
-                          type="checkbox" 
-                          v-model="selectedLotItems" 
-                          :value="lot.id"
-                        >
-                      </td>
-                      <td>{{ lot.lot_number }}</td>
-                      <td>{{ lot.sku }}</td>
-                      <td>{{ lot.qty }} {{ lot.uom }}</td>
-                      <td>{{ lot.bin?.bin_code || 'N/A' }}</td>
-                      <td>{{ formatDate(lot.expiry_date) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <!-- 库位数据 -->
-            <div v-if="activeDataSourceTab === 'bins'" class="data-content">
-              <div class="search-bar">
-                <input 
-                  v-model="binSearchQuery" 
-                  placeholder="搜索库位编码或区域..." 
-                  class="search-input"
-                >
-                <button @click="searchBins" class="btn btn-primary">搜索</button>
-              </div>
-              
-              <div class="data-table-container">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th><input type="checkbox" @change="toggleAllBins" v-model="selectAllBins"></th>
-                      <th>库位编码</th>
-                      <th>区域</th>
-                      <th>容量</th>
-                      <th>已用</th>
-                      <th>利用率</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="bin in filteredBins" :key="bin.id">
-                      <td>
-                        <input 
-                          type="checkbox" 
-                          v-model="selectedBinItems" 
-                          :value="bin.id"
-                        >
-                      </td>
-                      <td>{{ bin.bin_code }}</td>
-                      <td>{{ bin.zone }}</td>
-                      <td>{{ bin.capacity }}</td>
-                      <td>{{ bin.used || 0 }}</td>
-                      <td>
-                        <div class="utilization-bar">
-                          <div 
-                            :class="['utilization-fill', getUtilizationClass(bin.utilization || 0)]"
-                            :style="{ width: (bin.utilization || 0) + '%' }"
-                          ></div>
-                          <span>{{ bin.utilization || 0 }}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              <span class="selection-note">{{ selectedItemCount }} selected</span>
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- 右侧：打印选项和预览 -->
-      <div class="right-panel">
-        <div class="panel-section">
-          <h3>⚙️ 打印选项</h3>
-          
-          <div class="option-group">
-            <label class="option-label">
-              <span>打印份数:</span>
-              <input 
-                type="number" 
-                v-model="printOptions.copies" 
-                min="1" 
-                max="10" 
-                class="option-input"
-              >
+          <div v-if="currentSourceItems.length === 0" class="empty-state">
+            <strong>{{ currentSourceEmptyTitle }}</strong>
+            <span>{{ currentSourceEmptyCopy }}</span>
+          </div>
+
+          <div v-else class="source-list">
+            <article
+              v-for="record in currentSourceItems"
+              :key="`${activeDataSourceTab}-${record.id}`"
+              class="source-card"
+              :class="{ selected: isRecordSelected(activeDataSourceTab, record.id) }"
+              @click="toggleRecordSelection(activeDataSourceTab, record.id)"
+            >
+              <label class="record-check" @click.stop>
+                <input
+                  type="checkbox"
+                  :checked="isRecordSelected(activeDataSourceTab, record.id)"
+                  @change="toggleRecordSelection(activeDataSourceTab, record.id)"
+                >
+                <span></span>
+              </label>
+
+              <div class="record-content" v-if="activeDataSourceTab === 'po'">
+                <div class="record-title-row">
+                  <div>
+                    <strong>{{ record.item_name || record.sku }}</strong>
+                    <p>{{ record.sku }}</p>
+                  </div>
+                  <span class="status-pill neutral">{{ formatPOStatus(record.status) }}</span>
+                </div>
+
+                <div class="record-meta-grid">
+                  <div class="meta-cell">
+                    <span>PO Number</span>
+                    <strong>{{ record.po_number }}</strong>
+                  </div>
+                  <div class="meta-cell">
+                    <span>Quantity</span>
+                    <strong>{{ record.qty }} {{ record.uom || 'pcs' }}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="record-content" v-else-if="activeDataSourceTab === 'items'">
+                <div class="record-title-row">
+                  <div>
+                    <strong>{{ record.name || record.sku }}</strong>
+                    <p>{{ record.sku }}</p>
+                  </div>
+                  <span class="status-pill" :class="record.status === 'ACTIVE' ? 'good' : 'neutral'">
+                    {{ record.status || 'ACTIVE' }}
+                  </span>
+                </div>
+
+                <div class="record-meta-grid">
+                  <div class="meta-cell">
+                    <span>Category</span>
+                    <strong>{{ record.category || 'Uncategorized' }}</strong>
+                  </div>
+                  <div class="meta-cell">
+                    <span>Available</span>
+                    <strong>{{ record.availableQty || 0 }} {{ record.uom || 'pcs' }}</strong>
+                  </div>
+                  <div class="meta-cell">
+                    <span>Bins</span>
+                    <strong>{{ record.binCount || 0 }}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="record-content" v-else-if="activeDataSourceTab === 'lots'">
+                <div class="record-title-row">
+                  <div>
+                    <strong>{{ record.lot_number }}</strong>
+                    <p>{{ record.sku }}</p>
+                  </div>
+                  <span class="status-pill good">{{ record.qty }} {{ record.uom || 'pcs' }}</span>
+                </div>
+
+                <div class="record-meta-grid">
+                  <div class="meta-cell">
+                    <span>Bin</span>
+                    <strong>{{ record.bin?.bin_code || 'Unassigned' }}</strong>
+                  </div>
+                  <div class="meta-cell">
+                    <span>Expiry</span>
+                    <strong>{{ formatDate(record.expiry_date) }}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="record-content" v-else-if="activeDataSourceTab === 'bins'">
+                <div class="record-title-row">
+                  <div>
+                    <strong>{{ record.bin_code }}</strong>
+                    <p>{{ formatZone(record.zone) }}</p>
+                  </div>
+                  <span class="status-pill neutral">{{ record.utilization || 0 }}%</span>
+                </div>
+
+                <div class="record-meta-grid bin-grid">
+                  <div class="meta-cell">
+                    <span>Capacity</span>
+                    <strong>{{ record.capacity || 0 }}</strong>
+                  </div>
+                  <div class="meta-cell">
+                    <span>Used</span>
+                    <strong>{{ record.used || 0 }}</strong>
+                  </div>
+                </div>
+
+                <div class="utilization-track">
+                  <div
+                    class="utilization-fill"
+                    :class="utilizationTone(record.utilization || 0)"
+                    :style="{ width: `${Math.min(record.utilization || 0, 100)}%` }"
+                  ></div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </template>
+      </section>
+
+      <aside class="workspace-panel action-panel">
+        <div class="action-card">
+          <div class="panel-topline compact">
+            <div>
+              <p class="panel-eyebrow">Step 3</p>
+              <h2>Output Settings</h2>
+            </div>
+          </div>
+
+          <div class="option-grid">
+            <label class="option-field">
+              <span>Copies</span>
+              <input v-model="printOptions.copies" type="number" min="1" max="20" class="option-input">
             </label>
-          </div>
 
-          <div class="option-group">
-            <label class="option-label">
-              <span>输出格式:</span>
-              <select v-model="printOptions.format" class="option-select">
-                <option value="PDF">PDF</option>
-                <option value="PNG">PNG</option>
-                <option value="ZPL">ZPL (标签打印机)</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="option-group">
-            <label class="option-label">
-              <span>分辨率 (DPI):</span>
-              <select v-model="printOptions.dpi" class="option-select">
+            <label class="option-field">
+              <span>Resolution</span>
+              <select v-model="printOptions.dpi" class="option-input">
                 <option value="150">150 DPI</option>
                 <option value="300">300 DPI</option>
                 <option value="600">600 DPI</option>
               </select>
             </label>
           </div>
+
+          <div class="output-note">
+            <span>Output Format</span>
+            <strong>PDF Package</strong>
+          </div>
         </div>
 
-        <div class="panel-section">
-          <h3>📊 打印统计</h3>
-          <div class="print-stats">
-            <div class="stat-item">
-              <span class="stat-label">选中项目:</span>
-              <span class="stat-value">{{ selectedItemCount }}</span>
+        <div class="summary-card">
+          <div class="panel-topline compact">
+            <div>
+              <p class="panel-eyebrow">Summary</p>
+              <h2>Print Snapshot</h2>
             </div>
-            <div class="stat-item">
-              <span class="stat-label">总打印数:</span>
-              <span class="stat-value">{{ totalPrintCount }}</span>
+          </div>
+
+          <div class="summary-list">
+            <div class="summary-row">
+              <span>Template</span>
+              <strong>{{ selectedTemplate ? templateDisplayName(selectedTemplate) : 'Not selected' }}</strong>
             </div>
-            <div class="stat-item">
-              <span class="stat-label">模板:</span>
-              <span class="stat-value">{{ selectedTemplate?.name || '未选择' }}</span>
+            <div class="summary-row">
+              <span>Print Type</span>
+              <strong>{{ printType ? printTypeLabel(printType) : 'Not selected' }}</strong>
+            </div>
+            <div class="summary-row">
+              <span>Source</span>
+              <strong>{{ currentSourceLabel }}</strong>
+            </div>
+            <div class="summary-row">
+              <span>Selected Records</span>
+              <strong>{{ selectedItemCount }}</strong>
+            </div>
+            <div class="summary-row">
+              <span>Total Labels</span>
+              <strong>{{ totalPrintCount }}</strong>
             </div>
           </div>
         </div>
 
-        <div class="panel-section">
-          <h3>🖨️ 打印操作</h3>
-          <div class="print-actions">
-            <button 
-              @click="previewLabels" 
-              class="btn btn-info btn-block"
-              :disabled="!canPrint"
-            >
-              👁️ 预览标签
-            </button>
-            <button 
-              @click="printLabels" 
-              class="btn btn-success btn-block"
-              :disabled="!canPrint"
-            >
-              🖨️ 开始打印
-            </button>
+        <div class="primary-actions-card">
+          <button
+            class="ghost-btn wide"
+            @click="previewLabels"
+            :disabled="!canPrint || submittingAction === 'preview' || submittingAction === 'print'"
+          >
+            {{ submittingAction === 'preview' ? 'Building Preview...' : 'Preview Labels' }}
+          </button>
+          <button
+            class="primary-btn wide"
+            @click="printLabels"
+            :disabled="!canPrint || submittingAction === 'preview' || submittingAction === 'print'"
+          >
+            {{ submittingAction === 'print' ? 'Preparing Download...' : 'Generate Print Package' }}
+          </button>
+        </div>
+
+        <div class="guide-card">
+          <div class="panel-topline compact">
+            <div>
+              <p class="panel-eyebrow">Lot Guidance</p>
+              <h2>How Lot Labels Work</h2>
+            </div>
+          </div>
+
+          <div class="guide-item">
+            <strong>When it is created</strong>
+            <p>A lot code is created during inbound. The current default pattern is <code>LOT-YYYYMMDD-XXXX</code>.</p>
+          </div>
+
+          <div class="guide-item">
+            <strong>Where to place it</strong>
+            <p>Attach the lot label to the case, tray, carton, or inner box that moves together. Do not label every bottle unless you truly need bottle-level tracking.</p>
+          </div>
+
+          <div class="guide-item">
+            <strong>How precise to keep it</strong>
+            <p>For admin inventory, keep lot-level accuracy. For normal users, item labels are usually enough. That gives us traceability without making daily use too heavy.</p>
           </div>
         </div>
-      </div>
+
+        <div class="recent-card">
+          <div class="panel-topline compact">
+            <div>
+              <p class="panel-eyebrow">Recent Jobs</p>
+              <h2>Last Output</h2>
+            </div>
+            <button class="text-btn" @click="viewPrintHistory">View All</button>
+          </div>
+
+          <div v-if="recentJobs.length === 0" class="empty-state compact">
+            <strong>No print jobs yet</strong>
+            <span>Your recent print history will show up here.</span>
+          </div>
+
+          <div v-else class="recent-list">
+            <article v-for="job in recentJobs" :key="job.id" class="recent-job">
+              <div>
+                <strong>{{ job.job_number }}</strong>
+                <p>{{ templateDisplayName({ id: job.template_name, name: job.template_name }) }}</p>
+              </div>
+              <span class="status-pill" :class="jobStatusTone(job.status)">
+                {{ formatJobStatus(job.status) }}
+              </span>
+            </article>
+          </div>
+        </div>
+      </aside>
     </div>
 
-    <!-- 打印历史弹窗 -->
     <div v-if="showPrintHistory" class="modal-overlay" @click="closePrintHistory">
-      <div class="modal-content" @click.stop>
-        <div class="modal-header">
-          <h3>📋 打印历史</h3>
-          <button @click="closePrintHistory" class="close-btn">&times;</button>
-        </div>
-        <div class="modal-body">
-          <div class="print-history-list">
-            <div v-for="job in printJobs" :key="job.id" class="history-item">
-              <div class="job-header">
-                <span class="job-number">{{ job.job_number }}</span>
-                <span :class="['job-status', job.status]">{{ getJobStatusText(job.status) }}</span>
-              </div>
-              <div class="job-details">
-                <span>模板: {{ job.template_name }}</span>
-                <span>类型: {{ job.print_type }}</span>
-                <span>数量: {{ job.total_count }}</span>
-                <span>时间: {{ formatDateTime(job.created_at) }}</span>
-              </div>
-            </div>
+      <div class="history-modal" @click.stop>
+        <div class="history-header">
+          <div>
+            <p class="panel-eyebrow">Archive</p>
+            <h2>Print History</h2>
           </div>
+          <button class="icon-btn" @click="closePrintHistory">×</button>
+        </div>
+
+        <div v-if="loadingJobs" class="empty-state">
+          <strong>Loading history...</strong>
+          <span>Pulling completed and in-progress print jobs.</span>
+        </div>
+
+        <div v-else-if="printJobs.length === 0" class="empty-state">
+          <strong>No print jobs yet</strong>
+          <span>Create the first print package to start building history.</span>
+        </div>
+
+        <div v-else class="history-list">
+          <article v-for="job in printJobs" :key="job.id" class="history-card">
+            <div class="history-top">
+              <div>
+                <strong>{{ job.job_number }}</strong>
+                <p>{{ job.template_name }}</p>
+              </div>
+              <span class="status-pill" :class="jobStatusTone(job.status)">
+                {{ formatJobStatus(job.status) }}
+              </span>
+            </div>
+
+            <div class="history-meta">
+              <span>{{ printTypeLabel(job.print_type) }}</span>
+              <span>{{ job.total_count }} labels</span>
+              <span>{{ formatDateTime(job.createdAt) }}</span>
+            </div>
+
+            <div class="history-actions">
+              <button class="ghost-btn small" @click="downloadJob(job)" :disabled="!job.output_file">
+                Download
+              </button>
+              <button
+                class="primary-btn small"
+                @click="reprintJob(job)"
+                :disabled="submittingAction === `reprint:${job.id}`"
+              >
+                {{ submittingAction === `reprint:${job.id}` ? 'Rebuilding...' : 'Reprint' }}
+              </button>
+            </div>
+          </article>
         </div>
       </div>
     </div>
@@ -369,923 +523,1633 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import axios from 'axios'
 
-// 响应式数据
+const router = useRouter()
 const templates = ref([])
 const selectedTemplate = ref(null)
 const printType = ref('')
-const activeDataSourceTab = ref('po')
+const activeDataSourceTab = ref('')
+const loadingTemplates = ref(false)
+const loadingSources = ref(false)
+const loadingJobs = ref(false)
+const submittingAction = ref('')
+const showPrintHistory = ref(false)
 
-// 数据源标签页
-const dataSourceTabs = [
-  { key: 'po', label: '采购订单' },
-  { key: 'lots', label: '批次库存' },
-  { key: 'bins', label: '库位信息' }
-]
+const loadErrors = reactive({
+  templates: '',
+  po: '',
+  items: '',
+  lots: '',
+  bins: '',
+  jobs: ''
+})
 
-// 搜索查询
+const notice = reactive({
+  visible: false,
+  type: 'info',
+  title: '',
+  message: ''
+})
+
 const poSearchQuery = ref('')
+const itemSearchQuery = ref('')
 const lotSearchQuery = ref('')
 const binSearchQuery = ref('')
 
-// 数据列表
 const poLines = ref([])
+const inventoryItems = ref([])
 const lots = ref([])
 const bins = ref([])
+const printJobs = ref([])
 
-// 选中的项目
-const selectedPOItems = ref([])
-const selectedLotItems = ref([])
-const selectedBinItems = ref([])
-const selectAllPO = ref(false)
-const selectAllLots = ref(false)
-const selectAllBins = ref(false)
+const selectedPOLines = ref([])
+const selectedItems = ref([])
+const selectedLots = ref([])
+const selectedBins = ref([])
 
-// 打印选项
 const printOptions = ref({
   copies: 1,
   format: 'PDF',
   dpi: 300
 })
 
-// 打印历史
-const showPrintHistory = ref(false)
-const printJobs = ref([])
+const sourceTabRegistry = {
+  po: {
+    key: 'po',
+    label: 'Incoming PO Lines',
+    subtitle: 'Generate fresh lot labels from inbound purchase lines.'
+  },
+  items: {
+    key: 'items',
+    label: 'Item Master',
+    subtitle: 'Print clean item labels from your current SKU catalog.'
+  },
+  lots: {
+    key: 'lots',
+    label: 'Live Lots',
+    subtitle: 'Reprint or refresh labels for active tracked batches.'
+  },
+  bins: {
+    key: 'bins',
+    label: 'Bin Locations',
+    subtitle: 'Print location labels for shelves, refrigerators, and storage zones.'
+  }
+}
 
-// 计算属性
+const templateDisplayMap = {
+  'LOT-50x50': {
+    name: 'Lot Label 50×50',
+    description: 'Batch label with SKU, lot, quantity, bin, and expiry.'
+  },
+  '批次标签 50x50mm': {
+    name: 'Lot Label 50×50',
+    description: 'Batch label with SKU, lot, quantity, bin, and expiry.'
+  },
+  'BIN-80x40': {
+    name: 'Bin Label 80×40',
+    description: 'Location label for shelves, refrigerators, and storage bins.'
+  },
+  '库位标签 80x40mm': {
+    name: 'Bin Label 80×40',
+    description: 'Location label for shelves, refrigerators, and storage bins.'
+  },
+  'ITEM-60x40': {
+    name: 'Item Label 60×40',
+    description: 'Product label with SKU, item name, spec, and unit.'
+  },
+  '物料标签 60x40mm': {
+    name: 'Item Label 60×40',
+    description: 'Product label with SKU, item name, spec, and unit.'
+  }
+}
+
+const authConfig = () => ({
+  headers: {
+    Authorization: `Bearer ${localStorage.getItem('token')}`
+  }
+})
+
+const goBack = () => {
+  router.push('/dashboard')
+}
+
+const getBackendOrigin = () => {
+  const hostname = window.location.hostname || 'localhost'
+  return `http://${hostname}:3000`
+}
+
+const resolveDownloadUrl = (downloadPath) => {
+  if (!downloadPath) return ''
+  if (downloadPath.startsWith('http://') || downloadPath.startsWith('https://')) {
+    return downloadPath
+  }
+
+  return `${getBackendOrigin()}${downloadPath}`
+}
+
+const extractErrorMessage = (error, fallback) => {
+  return error.response?.data?.message || error.message || fallback
+}
+
+const safeLower = (value) => String(value || '').toLowerCase()
+
+const showNotice = (type, title, message) => {
+  notice.visible = true
+  notice.type = type
+  notice.title = title
+  notice.message = message
+}
+
+const syncSelections = (items, selectedItemsRef) => {
+  const validIds = new Set(items.map((item) => String(item.id)))
+  selectedItemsRef.value = selectedItemsRef.value.filter((id) => validIds.has(String(id)))
+}
+
+const availablePrintTypes = computed(() => selectedTemplate.value?.printTypes || [])
+
+const visibleSourceTabs = computed(() => {
+  switch (printType.value) {
+    case 'LOT':
+      return [sourceTabRegistry.lots, sourceTabRegistry.po]
+    case 'ITEM':
+      return [sourceTabRegistry.items]
+    case 'BIN':
+      return [sourceTabRegistry.bins]
+    default:
+      return []
+  }
+})
+
 const filteredPOLines = computed(() => {
   if (!poSearchQuery.value) return poLines.value
-  return poLines.value.filter(line => 
-    line.po_number.toLowerCase().includes(poSearchQuery.value.toLowerCase()) ||
-    line.sku.toLowerCase().includes(poSearchQuery.value.toLowerCase())
-  )
+
+  return poLines.value.filter((line) => (
+    safeLower(line.po_number).includes(safeLower(poSearchQuery.value)) ||
+    safeLower(line.sku).includes(safeLower(poSearchQuery.value)) ||
+    safeLower(line.item_name).includes(safeLower(poSearchQuery.value))
+  ))
+})
+
+const filteredItems = computed(() => {
+  if (!itemSearchQuery.value) return inventoryItems.value
+
+  return inventoryItems.value.filter((item) => (
+    safeLower(item.sku).includes(safeLower(itemSearchQuery.value)) ||
+    safeLower(item.name).includes(safeLower(itemSearchQuery.value)) ||
+    safeLower(item.category).includes(safeLower(itemSearchQuery.value))
+  ))
 })
 
 const filteredLots = computed(() => {
   if (!lotSearchQuery.value) return lots.value
-  return lots.value.filter(lot => 
-    lot.lot_number.toLowerCase().includes(lotSearchQuery.value.toLowerCase()) ||
-    lot.sku.toLowerCase().includes(lotSearchQuery.value.toLowerCase())
-  )
+
+  return lots.value.filter((lot) => (
+    safeLower(lot.lot_number).includes(safeLower(lotSearchQuery.value)) ||
+    safeLower(lot.sku).includes(safeLower(lotSearchQuery.value)) ||
+    safeLower(lot.bin?.bin_code).includes(safeLower(lotSearchQuery.value))
+  ))
 })
 
 const filteredBins = computed(() => {
   if (!binSearchQuery.value) return bins.value
-  return bins.value.filter(bin => 
-    bin.bin_code.toLowerCase().includes(binSearchQuery.value.toLowerCase()) ||
-    bin.zone.toLowerCase().includes(binSearchQuery.value.toLowerCase())
-  )
+
+  return bins.value.filter((bin) => (
+    safeLower(bin.bin_code).includes(safeLower(binSearchQuery.value)) ||
+    safeLower(bin.zone).includes(safeLower(binSearchQuery.value)) ||
+    safeLower(bin.temperature_zone).includes(safeLower(binSearchQuery.value))
+  ))
 })
 
-const selectedItemCount = computed(() => {
-  switch (printType.value) {
-    case 'LOT':
-      return selectedLotItems.value.length
-    case 'BIN':
-      return selectedBinItems.value.length
-    case 'ITEM':
-      return selectedPOItems.value.length
+const currentSourceItems = computed(() => {
+  switch (activeDataSourceTab.value) {
+    case 'po':
+      return filteredPOLines.value
+    case 'items':
+      return filteredItems.value
+    case 'lots':
+      return filteredLots.value
+    case 'bins':
+      return filteredBins.value
     default:
-      return 0
+      return []
   }
 })
 
-const totalPrintCount = computed(() => {
-  return selectedItemCount.value * printOptions.value.copies
+const currentSearchQuery = computed({
+  get() {
+    switch (activeDataSourceTab.value) {
+      case 'po':
+        return poSearchQuery.value
+      case 'items':
+        return itemSearchQuery.value
+      case 'lots':
+        return lotSearchQuery.value
+      case 'bins':
+        return binSearchQuery.value
+      default:
+        return ''
+    }
+  },
+  set(value) {
+    switch (activeDataSourceTab.value) {
+      case 'po':
+        poSearchQuery.value = value
+        break
+      case 'items':
+        itemSearchQuery.value = value
+        break
+      case 'lots':
+        lotSearchQuery.value = value
+        break
+      case 'bins':
+        binSearchQuery.value = value
+        break
+      default:
+        break
+    }
+  }
 })
 
-const canPrint = computed(() => {
-  return selectedTemplate.value && printType.value && selectedItemCount.value > 0
+const currentSearchPlaceholder = computed(() => {
+  switch (activeDataSourceTab.value) {
+    case 'po':
+      return 'Search PO number, SKU, or item name...'
+    case 'items':
+      return 'Search SKU, item name, or category...'
+    case 'lots':
+      return 'Search lot number, SKU, or bin...'
+    case 'bins':
+      return 'Search bin code, zone, or temperature...'
+    default:
+      return 'Search records...'
+  }
 })
 
-// 生命周期
-onMounted(() => {
-  loadTemplates()
-  loadMockData()
+const currentSourceLabel = computed(() => {
+  return sourceTabRegistry[activeDataSourceTab.value]?.label || 'No source selected'
 })
 
-// 方法
-const loadTemplates = async () => {
-  try {
-    const response = await axios.get('/api/print-center/templates', {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
-      }
-    })
-    
-    if (response.data.success) {
-      templates.value = response.data.data
-    }
-  } catch (error) {
-    console.error('加载模板失败:', error)
-    // 使用模拟数据
-    loadMockTemplates()
+const currentSourceEmptyTitle = computed(() => {
+  switch (activeDataSourceTab.value) {
+    case 'po':
+      return 'No purchase lines found'
+    case 'items':
+      return 'No items matched'
+    case 'lots':
+      return 'No active lots found'
+    case 'bins':
+      return 'No bins matched'
+    default:
+      return 'No records to show'
   }
-}
+})
 
-const loadMockTemplates = () => {
-  templates.value = [
-    {
-      id: 'LOT-50x50',
-      name: '批次标签 50x50mm',
-      description: '标准批次标签，包含SKU、批次、数量、库位、过期时间',
-      size: { width: 50, height: 50, unit: 'mm' },
-      placeholders: ['{{sku}}', '{{lot}}', '{{qty}}', '{{uom}}', '{{bin}}', '{{exp}}', '{{qr}}'],
-      printTypes: ['LOT']
-    },
-    {
-      id: 'BIN-80x40',
-      name: '库位标签 80x40mm',
-      description: '库位标识标签，包含库位编码、区域、容量信息',
-      size: { width: 80, height: 40, unit: 'mm' },
-      placeholders: ['{{bin_code}}', '{{zone}}', '{{capacity}}', '{{qr}}'],
-      printTypes: ['BIN']
-    },
-    {
-      id: 'ITEM-60x40',
-      name: '物料标签 60x40mm',
-      description: '物料标识标签，包含SKU、名称、规格、单位',
-      size: { width: 60, height: 40, unit: 'mm' },
-      placeholders: ['{{sku}}', '{{name}}', '{{spec}}', '{{uom}}', '{{qr}}'],
-      printTypes: ['ITEM']
-    }
-  ]
-}
-
-const loadMockData = async () => {
-  // Load real lots data from API
-  try {
-    const token = localStorage.getItem('token')
-    const response = await axios.get('/api/inventory-management/lots', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
-    
-    if (response.data.success) {
-      lots.value = response.data.data.lots || []
-    } else {
-      // Fallback to mock data
-      loadMockLotsData()
-    }
-  } catch (error) {
-    console.error('加载批次数据失败:', error)
-    // Fallback to mock data
-    loadMockLotsData()
+const currentSourceEmptyCopy = computed(() => {
+  switch (activeDataSourceTab.value) {
+    case 'po':
+      return loadErrors.po || 'Try a wider search or refresh purchase data.'
+    case 'items':
+      return loadErrors.items || 'Try a wider search or create a few item records first.'
+    case 'lots':
+      return loadErrors.lots || 'Create or receive stock first so live lots exist to print.'
+    case 'bins':
+      return loadErrors.bins || 'Create at least one storage location before printing bin labels.'
+    default:
+      return 'Refresh the workspace and try again.'
   }
+})
 
-  // Load bins data from API
-  try {
-    const token = localStorage.getItem('token')
-    const response = await axios.get('/api/inventory-management/bins', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
-    
-    if (response.data.success) {
-      bins.value = response.data.data.bins || []
-    } else {
-      loadMockBinsData()
-    }
-  } catch (error) {
-    console.error('加载库位数据失败:', error)
-    loadMockBinsData()
-  }
+const hasLoadErrors = computed(() => Object.values(loadErrors).some(Boolean))
+const loadErrorSummary = computed(() => Object.values(loadErrors).filter(Boolean).join(' · '))
+const workspaceBusy = computed(() => loadingTemplates.value || loadingSources.value)
+const recentJobs = computed(() => printJobs.value.slice(0, 4))
 
-  // Mock purchase orders (no real API yet)
-  loadMockPOData()
-}
-
-const loadMockLotsData = () => {
-  // 模拟批次数据
-  lots.value = [
-    {
-      id: 1,
-      lot_number: 'L20250820-001',
-      sku: 'PAD-001-XL',
-      qty: 100,
-      uom: 'pcs',
-      bin: { bin_code: 'A1-03-02' },
-      expiry_date: '2026-08-20'
-    }
-  ]
-}
-
-const loadMockBinsData = () => {
-  // 模拟库位数据
-  bins.value = [
-    {
-      id: 1,
-      bin_code: 'A1-03-02',
-      zone: 'A区',
-      capacity: 1000,
-      used: 750,
-      utilization: 75
-    }
-  ]
-}
-
-const loadMockPOData = () => {
-  // 模拟采购订单行数据
-  poLines.value = [
-    {
-      id: 1,
-      po_number: 'PO20250820-001',
-      sku: 'PAD-001-XL',
-      item_name: '智能平板电脑 XL',
-      qty: 100,
-      uom: 'pcs',
-      status: 'OPEN'
-    },
-    {
-      id: 2,
-      po_number: 'PO20250820-002',
-      sku: 'LAP-002-15',
-      item_name: '笔记本电脑 15寸',
-      qty: 50,
-      uom: 'pcs',
-      status: 'OPEN'
-    }
-  ]
-}
-
-const selectTemplate = (template) => {
-  selectedTemplate.value = template
-  // 自动选择第一个支持的打印类型
-  if (template.printTypes.length > 0) {
-    printType.value = template.printTypes[0]
-  }
-}
-
-const toggleAllPO = () => {
-  if (selectAllPO.value) {
-    selectedPOItems.value = filteredPOLines.value.map(item => item.id)
-  } else {
-    selectedPOItems.value = []
-  }
-}
-
-const toggleAllLots = () => {
-  if (selectAllLots.value) {
-    selectedLotItems.value = filteredLots.value.map(item => item.id)
-  } else {
-    selectedLotItems.value = []
-  }
-}
-
-const toggleAllBins = () => {
-  if (selectAllBins.value) {
-    selectedBinItems.value = filteredBins.value.map(item => item.id)
-  } else {
-    selectedBinItems.value = []
-  }
-}
-
-const searchPO = () => {
-  // 实际应该调用API搜索
-  console.log('搜索采购订单:', poSearchQuery.value)
-}
-
-const searchLots = () => {
-  // 实际应该调用API搜索
-  console.log('搜索批次:', lotSearchQuery.value)
-}
-
-const searchBins = () => {
-  // 实际应该调用API搜索
-  console.log('搜索库位:', binSearchQuery.value)
-}
-
-const previewLabels = async () => {
-  try {
-    const items = getSelectedItems()
-    if (items.length === 0) {
-      alert('请选择要打印的项目')
-      return
-    }
-
-    const response = await axios.post('/api/print-center/print', {
-      templateId: selectedTemplate.value.id,
-      printType: printType.value,
-      items: items,
-      options: printOptions.value
-    }, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
-      }
-    })
-
-    if (response.data.success) {
-      const downloadUrl = `http://127.0.0.1:3000${response.data.data.download_url}`
-      window.open(downloadUrl, '_blank')
-      alert(`预览成功！共生成 ${response.data.data.total_count} 个标签\n\nPDF将在新窗口打开`)
-    }
-  } catch (error) {
-    console.error('预览标签失败:', error)
-    alert('预览失败: ' + error.message)
-  }
-}
-
-const printLabels = async () => {
-  try {
-    const items = getSelectedItems()
-    if (items.length === 0) {
-      alert('请选择要打印的项目')
-      return
-    }
-
-    const response = await axios.post('/api/print-center/print', {
-      templateId: selectedTemplate.value.id,
-      printType: printType.value,
-      items: items,
-      options: printOptions.value
-    }, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
-      }
-    })
-
-    if (response.data.success) {
-      const downloadUrl = `http://127.0.0.1:3000${response.data.data.download_url}`
-      const link = document.createElement('a')
-      link.href = downloadUrl
-      link.download = `${response.data.data.job_number}.pdf`
-      link.click()
-      
-      alert(`打印任务完成！\n任务号: ${response.data.data.job_number}\n\nPDF已自动下载`)
-      
-      // 清空选择
-      selectedPOItems.value = []
-      selectedLotItems.value = []
-      selectedBinItems.value = []
-    }
-  } catch (error) {
-    console.error('打印标签失败:', error)
-    alert('打印失败: ' + error.message)
-  }
-}
-
-const getSelectedItems = () => {
-  switch (printType.value) {
-    case 'LOT':
-      return selectedLotItems.value.map(id => ({ lot_id: id }))
-    case 'BIN':
-      return selectedBinItems.value.map(id => ({ bin_id: id }))
-    case 'ITEM':
-      return selectedPOItems.value.map(id => ({ po_line_id: id }))
+const getSelectionArray = (sourceKey) => {
+  switch (sourceKey) {
+    case 'po':
+      return selectedPOLines.value
+    case 'items':
+      return selectedItems.value
+    case 'lots':
+      return selectedLots.value
+    case 'bins':
+      return selectedBins.value
     default:
       return []
   }
 }
 
-const viewPrintHistory = async () => {
+const setSelectionArray = (sourceKey, nextValue) => {
+  switch (sourceKey) {
+    case 'po':
+      selectedPOLines.value = nextValue
+      break
+    case 'items':
+      selectedItems.value = nextValue
+      break
+    case 'lots':
+      selectedLots.value = nextValue
+      break
+    case 'bins':
+      selectedBins.value = nextValue
+      break
+    default:
+      break
+  }
+}
+
+const selectedItemCount = computed(() => getSelectionArray(activeDataSourceTab.value).length)
+const totalPrintCount = computed(() => selectedItemCount.value * Math.max(1, Number(printOptions.value.copies || 1)))
+const canPrint = computed(() => Boolean(selectedTemplate.value && printType.value && selectedItemCount.value > 0))
+
+const allCurrentSourceSelected = computed(() => {
+  const visibleIds = currentSourceItems.value.map((item) => String(item.id))
+  if (visibleIds.length === 0) return false
+
+  const selectedIds = new Set(getSelectionArray(activeDataSourceTab.value).map((id) => String(id)))
+  return visibleIds.every((id) => selectedIds.has(id))
+})
+
+watch(selectedTemplate, (template) => {
+  if (!template) {
+    printType.value = ''
+    activeDataSourceTab.value = ''
+    return
+  }
+
+  if (!template.printTypes?.includes(printType.value)) {
+    printType.value = template.printTypes?.[0] || ''
+  }
+})
+
+watch(printType, () => {
+  if (!visibleSourceTabs.value.some((tab) => tab.key === activeDataSourceTab.value)) {
+    activeDataSourceTab.value = visibleSourceTabs.value[0]?.key || ''
+  }
+})
+
+onMounted(() => {
+  void refreshWorkspace()
+})
+
+const loadTemplates = async () => {
+  loadingTemplates.value = true
+  loadErrors.templates = ''
+
   try {
-    const response = await axios.get('/api/print-center/jobs', {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
-      }
-    })
-    
-    if (response.data.success) {
-      printJobs.value = response.data.data.jobs
-      showPrintHistory.value = true
+    const response = await axios.get('/api/print-center/templates', authConfig())
+
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load templates.')
+    }
+
+    templates.value = response.data.data || []
+
+    if (!templates.value.length) {
+      selectedTemplate.value = null
+      return
+    }
+
+    const stillExists = selectedTemplate.value && templates.value.find((template) => template.id === selectedTemplate.value.id)
+    if (stillExists) {
+      selectedTemplate.value = stillExists
+    } else {
+      selectedTemplate.value = templates.value[0]
     }
   } catch (error) {
-    console.error('获取打印历史失败:', error)
-    // 使用模拟数据
-    printJobs.value = [
-      {
-        id: 1,
-        job_number: 'PRINT-1734584123456',
-        template_name: 'LOT-50x50',
-        print_type: 'LOT',
-        total_count: 5,
-        status: 'COMPLETED',
-        created_at: new Date().toISOString()
-      }
-    ]
-    showPrintHistory.value = true
+    console.error('Failed to load templates:', error)
+    templates.value = []
+    selectedTemplate.value = null
+    loadErrors.templates = extractErrorMessage(error, 'Templates could not be loaded.')
+  } finally {
+    loadingTemplates.value = false
   }
+}
+
+const loadPurchaseOrderLines = async () => {
+  loadErrors.po = ''
+
+  try {
+    const response = await axios.get('/api/purchase/orders', {
+      ...authConfig(),
+      params: { limit: 100 }
+    })
+
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load purchase orders.')
+    }
+
+    const orders = response.data.data.purchaseOrders || []
+    poLines.value = orders.flatMap((order) => (order.lines || []).map((line) => ({
+      ...line,
+      po_number: order.po_number
+    })))
+    syncSelections(poLines.value, selectedPOLines)
+  } catch (error) {
+    console.error('Failed to load purchase order lines:', error)
+    poLines.value = []
+    selectedPOLines.value = []
+    loadErrors.po = extractErrorMessage(error, 'Purchase data could not be loaded.')
+  }
+}
+
+const loadInventoryItems = async () => {
+  loadErrors.items = ''
+
+  try {
+    const response = await axios.get('/api/inventory-management/items', {
+      ...authConfig(),
+      params: { limit: 200, sortBy: 'sku' }
+    })
+
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load items.')
+    }
+
+    inventoryItems.value = response.data.data.items || []
+    syncSelections(inventoryItems.value, selectedItems)
+  } catch (error) {
+    console.error('Failed to load inventory items:', error)
+    inventoryItems.value = []
+    selectedItems.value = []
+    loadErrors.items = extractErrorMessage(error, 'Item records could not be loaded.')
+  }
+}
+
+const loadLots = async () => {
+  loadErrors.lots = ''
+
+  try {
+    const response = await axios.get('/api/inventory-management/lots', authConfig())
+
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load lots.')
+    }
+
+    lots.value = response.data.data.lots || []
+    syncSelections(lots.value, selectedLots)
+  } catch (error) {
+    console.error('Failed to load lots:', error)
+    lots.value = []
+    selectedLots.value = []
+    loadErrors.lots = extractErrorMessage(error, 'Lot data could not be loaded.')
+  }
+}
+
+const loadBins = async () => {
+  loadErrors.bins = ''
+
+  try {
+    const response = await axios.get('/api/inventory-management/bins', authConfig())
+
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load bins.')
+    }
+
+    bins.value = response.data.data.bins || []
+    syncSelections(bins.value, selectedBins)
+  } catch (error) {
+    console.error('Failed to load bins:', error)
+    bins.value = []
+    selectedBins.value = []
+    loadErrors.bins = extractErrorMessage(error, 'Bin data could not be loaded.')
+  }
+}
+
+const loadPrintJobsSnapshot = async (limit = 6) => {
+  loadErrors.jobs = ''
+  loadingJobs.value = true
+
+  try {
+    const response = await axios.get('/api/print-center/jobs', {
+      ...authConfig(),
+      params: { limit }
+    })
+
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load print jobs.')
+    }
+
+    printJobs.value = response.data.data.jobs || []
+  } catch (error) {
+    console.error('Failed to load print jobs:', error)
+    printJobs.value = []
+    loadErrors.jobs = extractErrorMessage(error, 'Print history could not be loaded.')
+  } finally {
+    loadingJobs.value = false
+  }
+}
+
+const loadPrintData = async () => {
+  loadingSources.value = true
+  await Promise.all([
+    loadPurchaseOrderLines(),
+    loadInventoryItems(),
+    loadLots(),
+    loadBins()
+  ])
+  loadingSources.value = false
+}
+
+const refreshWorkspace = async () => {
+  await Promise.all([
+    loadTemplates(),
+    loadPrintData(),
+    loadPrintJobsSnapshot()
+  ])
+}
+
+const selectTemplate = (template) => {
+  selectedTemplate.value = template
+}
+
+const isRecordSelected = (sourceKey, recordId) => {
+  return getSelectionArray(sourceKey).includes(recordId)
+}
+
+const toggleRecordSelection = (sourceKey, recordId) => {
+  const current = [...getSelectionArray(sourceKey)]
+  const recordIndex = current.findIndex((id) => String(id) === String(recordId))
+
+  if (recordIndex >= 0) {
+    current.splice(recordIndex, 1)
+  } else {
+    current.push(recordId)
+  }
+
+  setSelectionArray(sourceKey, current)
+}
+
+const toggleSelectAllCurrentSource = () => {
+  const sourceKey = activeDataSourceTab.value
+  if (!sourceKey) return
+
+  if (allCurrentSourceSelected.value) {
+    setSelectionArray(sourceKey, [])
+    return
+  }
+
+  setSelectionArray(sourceKey, currentSourceItems.value.map((item) => item.id))
+}
+
+const getSelectedItems = () => {
+  switch (printType.value) {
+    case 'LOT':
+      if (activeDataSourceTab.value === 'po') {
+        return selectedPOLines.value.map((id) => ({ po_line_id: id }))
+      }
+      return selectedLots.value.map((id) => ({ lot_id: id }))
+    case 'BIN':
+      return selectedBins.value.map((id) => ({ bin_id: id }))
+    case 'ITEM':
+      return selectedItems.value
+        .map((id) => inventoryItems.value.find((item) => String(item.id) === String(id)))
+        .filter(Boolean)
+        .map((item) => ({
+          item_id: item.id,
+          sku: item.sku
+        }))
+    default:
+      return []
+  }
+}
+
+const clearSelections = () => {
+  selectedPOLines.value = []
+  selectedItems.value = []
+  selectedLots.value = []
+  selectedBins.value = []
+}
+
+const submitPrintJob = async () => {
+  const items = getSelectedItems()
+
+  if (!items.length || !selectedTemplate.value || !printType.value) {
+    throw new Error('Select a template and at least one record before printing.')
+  }
+
+  const response = await axios.post('/api/print-center/print', {
+    templateId: selectedTemplate.value.id,
+    printType: printType.value,
+    items,
+    options: printOptions.value
+  }, authConfig())
+
+  if (!response.data.success) {
+    throw new Error(response.data.message || 'Failed to build the print package.')
+  }
+
+  return response.data.data
+}
+
+const previewLabels = async () => {
+  submittingAction.value = 'preview'
+
+  try {
+    const data = await submitPrintJob()
+    window.open(resolveDownloadUrl(data.download_url), '_blank', 'noopener')
+    showNotice('success', 'Preview Ready', `${data.total_count} labels were opened in a new browser tab.`)
+    await loadPrintJobsSnapshot()
+  } catch (error) {
+    console.error('Preview failed:', error)
+    showNotice('error', 'Preview Failed', extractErrorMessage(error, 'Please try again in a moment.'))
+  } finally {
+    submittingAction.value = ''
+  }
+}
+
+const printLabels = async () => {
+  submittingAction.value = 'print'
+
+  try {
+    const data = await submitPrintJob()
+    const downloadUrl = resolveDownloadUrl(data.download_url)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = `${data.job_number}.pdf`
+    link.click()
+
+    clearSelections()
+    showNotice('success', 'Print Package Ready', `${data.job_number} was generated and downloaded successfully.`)
+    await loadPrintJobsSnapshot()
+  } catch (error) {
+    console.error('Print failed:', error)
+    showNotice('error', 'Print Failed', extractErrorMessage(error, 'Please try again in a moment.'))
+  } finally {
+    submittingAction.value = ''
+  }
+}
+
+const viewPrintHistory = async () => {
+  showPrintHistory.value = true
+  await loadPrintJobsSnapshot(20)
 }
 
 const closePrintHistory = () => {
   showPrintHistory.value = false
 }
 
-const refreshTemplates = () => {
-  loadTemplates()
+const downloadJob = (job) => {
+  const downloadUrl = resolveDownloadUrl(job.output_file)
+  if (!downloadUrl) {
+    showNotice('error', 'Download Unavailable', 'This job does not have a downloadable file yet.')
+    return
+  }
+
+  const link = document.createElement('a')
+  link.href = downloadUrl
+  link.download = `${job.job_number}.pdf`
+  link.click()
 }
 
-// 工具函数
-const getPOStatusText = (status) => {
+const reprintJob = async (job) => {
+  submittingAction.value = `reprint:${job.id}`
+
+  try {
+    const response = await axios.post(`/api/print-center/jobs/${job.id}/reprint`, {}, authConfig())
+
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to rebuild this print job.')
+    }
+
+    const downloadUrl = resolveDownloadUrl(response.data.data.download_url)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = `${response.data.data.job_number}.pdf`
+    link.click()
+
+    showNotice('success', 'Reprint Ready', `${response.data.data.job_number} has been generated again.`)
+    await loadPrintJobsSnapshot(20)
+  } catch (error) {
+    console.error('Reprint failed:', error)
+    showNotice('error', 'Reprint Failed', extractErrorMessage(error, 'Please try again in a moment.'))
+  } finally {
+    submittingAction.value = ''
+  }
+}
+
+const templateDisplayName = (template) => {
+  if (!template) return ''
+  return templateDisplayMap[template.id]?.name || templateDisplayMap[template.name]?.name || template.name || template.id
+}
+
+const templateDisplayDescription = (template) => {
+  if (!template) return ''
+  return templateDisplayMap[template.id]?.description || templateDisplayMap[template.name]?.description || template.description || 'Reusable label format'
+}
+
+const templateIcon = (template) => {
+  const firstType = template?.printTypes?.[0]
+  if (firstType === 'LOT') return 'LOT'
+  if (firstType === 'BIN') return 'BIN'
+  if (firstType === 'ITEM') return 'SKU'
+  return 'LBL'
+}
+
+const printTypeLabel = (type) => {
+  const labelMap = {
+    LOT: 'Lot Labels',
+    BIN: 'Bin Labels',
+    ITEM: 'Item Labels'
+  }
+  return labelMap[type] || type
+}
+
+const printTypeIcon = (type) => {
+  const iconMap = {
+    LOT: '◫',
+    BIN: '⌂',
+    ITEM: '▣'
+  }
+  return iconMap[type] || '•'
+}
+
+const formatPOStatus = (status) => {
   const statusMap = {
-    'OPEN': '待收货',
-    'PARTIAL': '部分收货',
-    'COMPLETED': '已完成'
+    OPEN: 'Open',
+    PARTIAL: 'Partial',
+    COMPLETED: 'Completed'
+  }
+  return statusMap[status] || status || 'Open'
+}
+
+const formatJobStatus = (status) => {
+  const statusMap = {
+    PENDING: 'Pending',
+    PROCESSING: 'Processing',
+    COMPLETED: 'Completed',
+    FAILED: 'Failed'
   }
   return statusMap[status] || status
 }
 
-const getJobStatusText = (status) => {
-  const statusMap = {
-    'PENDING': '待处理',
-    'PROCESSING': '处理中',
-    'COMPLETED': '已完成',
-    'FAILED': '失败'
-  }
-  return statusMap[status] || status
+const jobStatusTone = (status) => {
+  if (status === 'FAILED') return 'danger'
+  if (status === 'COMPLETED') return 'good'
+  if (status === 'PROCESSING') return 'neutral'
+  return 'neutral'
 }
 
-const getUtilizationClass = (utilization) => {
-  if (utilization > 80) return 'high'
-  if (utilization > 50) return 'medium'
-  return 'low'
+const utilizationTone = (utilization) => {
+  if (utilization >= 85) return 'danger'
+  if (utilization >= 55) return 'medium'
+  return 'good'
 }
 
-const formatDate = (dateString) => {
-  if (!dateString) return 'N/A'
-  return new Date(dateString).toLocaleDateString('zh-CN')
+const formatZone = (zone) => {
+  const normalized = String(zone || '').trim()
+  if (normalized === 'A区') return 'Zone A'
+  if (normalized === 'B区') return 'Zone B'
+  if (normalized === 'C区') return 'Zone C'
+  return normalized || 'Zone'
 }
 
-const formatDateTime = (dateTimeString) => {
-  if (!dateTimeString) return 'N/A'
-  return new Date(dateTimeString).toLocaleString('zh-CN')
+const formatDate = (value) => {
+  if (!value) return 'Not set'
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Not set'
+
+  return date.toLocaleDateString('en-US')
+}
+
+const formatDateTime = (value) => {
+  if (!value) return 'Not set'
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Not set'
+
+  return date.toLocaleString('en-US')
 }
 </script>
 
 <style scoped>
 .print-center {
-  padding: 20px;
-  background: #f5f5f5;
   min-height: 100vh;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(96, 165, 250, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(52, 211, 153, 0.14), transparent 26%),
+    linear-gradient(180deg, #f6fbff 0%, #eef3f9 100%);
+  color: #0f172a;
 }
 
-.header {
+.hero-card,
+.workspace-panel,
+.inline-banner,
+.history-modal {
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+}
+
+.hero-card {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 30px;
-  background: white;
-  padding: 20px;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  align-items: flex-start;
+  gap: 24px;
+  padding: 28px;
+  border-radius: 30px;
 }
 
-.header h1 {
-  margin: 0;
-  color: #333;
-  font-size: 28px;
-}
-
-.header-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.main-content {
-  display: grid;
-  grid-template-columns: 300px 1fr 350px;
-  gap: 20px;
-  height: calc(100vh - 150px);
-}
-
-.left-panel, .center-panel, .right-panel {
-  background: white;
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-  overflow: hidden;
-}
-
-.panel-section {
-  padding: 20px;
-  border-bottom: 1px solid #eee;
-}
-
-.panel-section:last-child {
-  border-bottom: none;
-}
-
-.panel-section h3 {
-  margin: 0 0 15px 0;
-  color: #333;
-  font-size: 16px;
-}
-
-.template-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.template-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 2px solid #eee;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s;
-}
-
-.template-item:hover {
-  border-color: #007bff;
-  background: #f8f9fa;
-}
-
-.template-item.active {
-  border-color: #007bff;
-  background: #e3f2fd;
-}
-
-.template-icon {
-  font-size: 24px;
-}
-
-.template-info {
-  flex: 1;
-}
-
-.template-name {
-  font-weight: 600;
-  color: #333;
-  margin-bottom: 4px;
-}
-
-.template-desc {
-  font-size: 12px;
-  color: #666;
-  margin-bottom: 4px;
-}
-
-.template-size {
+.eyebrow,
+.panel-eyebrow {
+  margin: 0 0 8px;
   font-size: 11px;
-  color: #999;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #64748b;
 }
 
-.template-details {
-  font-size: 14px;
+.hero-copy h1,
+.panel-topline h2,
+.panel-topline h3,
+.history-header h2 {
+  margin: 0;
+  font-size: clamp(1.65rem, 2vw, 2.45rem);
+  line-height: 1.05;
+  font-weight: 800;
 }
 
-.detail-item {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
+.panel-topline h2,
+.panel-topline h3,
+.history-header h2 {
+  font-size: 1.3rem;
 }
 
-.detail-item .label {
-  color: #666;
+.hero-text {
+  max-width: 720px;
+  margin: 14px 0 0;
+  color: #475569;
+  font-size: 1rem;
+  line-height: 1.7;
 }
 
-.detail-item .value {
-  color: #333;
-  font-weight: 500;
-}
-
-.placeholders {
+.hero-metrics {
   display: flex;
   flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.hero-metric {
+  min-width: 110px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.hero-metric span,
+.panel-meta,
+.template-card-copy p,
+.selection-note,
+.summary-row span,
+.meta-cell span,
+.guide-item p,
+.recent-job p,
+.history-meta,
+.notice-copy span,
+.detail-row > span {
+  color: #64748b;
+}
+
+.hero-metric span {
+  display: block;
+  font-size: 0.78rem;
+}
+
+.hero-metric strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.45rem;
+}
+
+.hero-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.primary-btn,
+.ghost-btn,
+.text-btn,
+.icon-btn {
+  border: none;
+  border-radius: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.primary-btn:hover,
+.ghost-btn:hover,
+.text-btn:hover,
+.icon-btn:hover {
+  transform: translateY(-1px);
+}
+
+.primary-btn:disabled,
+.ghost-btn:disabled,
+.text-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+.primary-btn {
+  padding: 14px 18px;
+  background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 100%);
+  color: white;
+  box-shadow: 0 14px 28px rgba(29, 78, 216, 0.24);
+}
+
+.ghost-btn {
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.ghost-btn.small,
+.primary-btn.small {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 0.92rem;
+}
+
+.wide {
+  width: 100%;
+  justify-content: center;
+}
+
+.inline-banner {
+  margin-top: 16px;
+  padding: 16px 18px;
+  border-radius: 22px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.inline-banner.info {
+  color: #1d4ed8;
+}
+
+.inline-banner.error {
+  background: rgba(255, 241, 242, 0.84);
+  color: #be123c;
+}
+
+.inline-banner.success {
+  background: rgba(236, 253, 245, 0.88);
+  color: #047857;
+}
+
+.notice-copy {
+  display: grid;
   gap: 4px;
 }
 
-.placeholder-tag {
-  background: #e3f2fd;
-  color: #1976d2;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-family: monospace;
+.notice-close,
+.text-btn,
+.icon-btn {
+  background: transparent;
+  color: inherit;
 }
 
-.no-selection {
-  color: #999;
-  font-style: italic;
-  text-align: center;
-  padding: 20px;
+.notice-close {
+  padding: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
 }
 
-.print-type-selector {
+.print-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 340px;
+  gap: 20px;
+  margin-top: 20px;
+  align-items: start;
+}
+
+.workspace-panel {
+  border-radius: 30px;
+  padding: 22px;
+}
+
+.template-panel,
+.action-panel {
+  position: sticky;
+  top: 18px;
+}
+
+.panel-topline {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 20px;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 18px;
 }
 
-.radio-label {
+.panel-topline.compact {
+  margin-bottom: 16px;
+}
+
+.template-grid,
+.source-list,
+.recent-list,
+.history-list {
+  display: grid;
+  gap: 14px;
+}
+
+.template-card,
+.source-card,
+.template-detail-card,
+.action-card,
+.summary-card,
+.primary-actions-card,
+.guide-card,
+.recent-card,
+.history-card {
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.template-card {
+  width: 100%;
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.template-card:hover,
+.source-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(59, 130, 246, 0.28);
+  box-shadow: 0 14px 28px rgba(148, 163, 184, 0.18);
+}
+
+.template-card.active {
+  border-color: rgba(37, 99, 235, 0.3);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(239, 246, 255, 0.86) 100%);
+}
+
+.template-card-top,
+.record-title-row,
+.history-top,
+.history-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.template-badge,
+.template-size-pill,
+.support-pill,
+.field-pill,
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.template-badge {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.14), rgba(15, 23, 42, 0.08));
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.template-size-pill,
+.support-pill,
+.field-pill,
+.status-pill {
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.template-size-pill,
+.field-pill,
+.status-pill.neutral {
+  background: rgba(241, 245, 249, 0.92);
+  color: #334155;
+}
+
+.support-pill,
+.status-pill.good {
+  background: rgba(219, 234, 254, 0.92);
+  color: #1d4ed8;
+}
+
+.status-pill.danger {
+  background: rgba(255, 228, 230, 0.92);
+  color: #be123c;
+}
+
+.status-pill.medium {
+  background: rgba(254, 240, 138, 0.92);
+  color: #a16207;
+}
+
+.template-card-copy {
+  margin-top: 14px;
+}
+
+.template-card-copy strong,
+.source-card strong,
+.summary-row strong,
+.guide-item strong,
+.recent-job strong,
+.history-card strong {
+  color: #0f172a;
+}
+
+.template-card-copy p,
+.template-detail-copy,
+.empty-state span,
+.guide-item p,
+.recent-job p,
+.record-title-row p,
+.history-top p {
+  margin: 6px 0 0;
+  line-height: 1.55;
+}
+
+.template-support,
+.detail-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.template-support {
+  margin-top: 14px;
+}
+
+.template-detail-card,
+.action-card,
+.summary-card,
+.primary-actions-card,
+.guide-card,
+.recent-card {
+  margin-top: 18px;
+  padding: 18px;
+}
+
+.detail-row,
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.detail-row + .detail-row,
+.summary-row + .summary-row,
+.guide-item + .guide-item,
+.recent-job + .recent-job {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.detail-size {
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(241, 245, 249, 0.9);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.type-switcher,
+.source-tabs,
+.source-toolbar,
+.option-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.type-switcher {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.type-chip {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.72);
   cursor: pointer;
+  font-weight: 700;
+  color: #334155;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
 
-.radio-label input[type="radio"] {
-  margin: 0;
-}
-
-.radio-text {
-  color: #333;
-}
-
-.data-source-selector {
-  margin-top: 20px;
+.type-chip.active {
+  border-color: rgba(59, 130, 246, 0.24);
+  background: linear-gradient(135deg, rgba(219, 234, 254, 0.92), rgba(255, 255, 255, 0.92));
+  color: #0f172a;
 }
 
 .source-tabs {
-  display: flex;
-  border-bottom: 1px solid #eee;
-  margin-bottom: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-top: 18px;
 }
 
-.tab-btn {
-  padding: 10px 20px;
-  border: none;
-  background: none;
-  cursor: pointer;
-  color: #666;
-  border-bottom: 2px solid transparent;
-  transition: all 0.3s;
-}
-
-.tab-btn.active {
-  color: #007bff;
-  border-bottom-color: #007bff;
-}
-
-.search-bar {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 15px;
-}
-
-.search-input {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-}
-
-.data-table-container {
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.data-table th,
-.data-table td {
-  padding: 8px;
+.source-tab {
+  padding: 16px;
   text-align: left;
-  border-bottom: 1px solid #eee;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.68);
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease;
 }
 
-.data-table th {
-  background: #f8f9fa;
-  font-weight: 600;
-  color: #333;
+.source-tab.active {
+  border-color: rgba(59, 130, 246, 0.24);
+  background: rgba(239, 246, 255, 0.9);
 }
 
-.data-table tbody tr:hover {
-  background: #f8f9fa;
+.source-tab span {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+  line-height: 1.45;
 }
 
-.status-badge {
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
+.source-toolbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  margin: 18px 0;
 }
 
-.status-badge.OPEN {
-  background: #fff3cd;
-  color: #856404;
-}
-
-.status-badge.PARTIAL {
-  background: #d1ecf1;
-  color: #0c5460;
-}
-
-.status-badge.COMPLETED {
-  background: #d4edda;
-  color: #155724;
-}
-
-.utilization-bar {
+.search-shell {
   position: relative;
-  width: 60px;
-  height: 16px;
-  background: #e9ecef;
-  border-radius: 8px;
+}
+
+.search-input,
+.option-input {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #0f172a;
+  font-size: 0.98rem;
+  padding: 14px 16px;
+  box-sizing: border-box;
+}
+
+.search-input:focus,
+.option-input:focus {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.35);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.08);
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.source-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 16px;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.source-card.selected {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 246, 255, 0.9));
+}
+
+.record-check {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+}
+
+.record-check input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  cursor: pointer;
+}
+
+.record-check span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(148, 163, 184, 0.4);
+  background: rgba(255, 255, 255, 0.9);
+  box-sizing: border-box;
+}
+
+.record-check input:checked + span {
+  border-color: #2563eb;
+  background: radial-gradient(circle at center, #2563eb 0 42%, white 46%);
+}
+
+.record-content {
+  min-width: 0;
+}
+
+.record-title-row p,
+.history-top p {
+  font-size: 0.88rem;
+}
+
+.record-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.record-meta-grid.bin-grid {
+  margin-top: 12px;
+}
+
+.meta-cell {
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.86);
+}
+
+.meta-cell strong {
+  display: block;
+  margin-top: 4px;
+}
+
+.utilization-track {
+  height: 10px;
+  margin-top: 14px;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.88);
   overflow: hidden;
 }
 
 .utilization-fill {
   height: 100%;
-  transition: width 0.3s;
+  border-radius: inherit;
 }
 
-.utilization-fill.low {
-  background: #28a745;
+.utilization-fill.good {
+  background: linear-gradient(90deg, #60a5fa, #2563eb);
 }
 
 .utilization-fill.medium {
-  background: #ffc107;
+  background: linear-gradient(90deg, #fbbf24, #f59e0b);
 }
 
-.utilization-fill.high {
-  background: #dc3545;
+.utilization-fill.danger {
+  background: linear-gradient(90deg, #fb7185, #e11d48);
 }
 
-.utilization-bar span {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 9px;
-  font-weight: 500;
-  color: white;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+.option-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.option-group {
-  margin-bottom: 15px;
+.option-field {
+  display: grid;
+  gap: 8px;
 }
 
-.option-label {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: #333;
+.option-field span,
+.output-note span {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #64748b;
 }
 
-.option-input,
-.option-select {
-  padding: 6px 8px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  width: 100px;
-}
-
-.print-stats {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.stat-item {
+.output-note {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.86);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.stat-label {
-  color: #666;
+.primary-actions-card {
+  display: grid;
+  gap: 12px;
 }
 
-.stat-value {
-  color: #333;
-  font-weight: 600;
+.guide-item code {
+  padding: 3px 7px;
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.94);
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
+  font-size: 0.82rem;
 }
 
-.print-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.recent-job,
+.history-card {
+  padding: 16px;
 }
 
-.btn {
-  padding: 10px 16px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.2s;
+.text-btn {
+  padding: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
 }
-
-.btn-primary { background: #007bff; color: white; }
-.btn-success { background: #28a745; color: white; }
-.btn-info { background: #17a2b8; color: white; }
-.btn-warning { background: #ffc107; color: #212529; }
-.btn-danger { background: #dc3545; color: white; }
-
-.btn:hover { opacity: 0.8; transform: translateY(-1px); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-.btn-block { width: 100%; }
 
 .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0,0,0,0.5);
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 1200;
+  padding: 20px;
+  box-sizing: border-box;
 }
 
-.modal-content {
-  background: white;
-  border-radius: 10px;
-  width: 80%;
-  max-width: 800px;
-  max-height: 80vh;
+.history-modal {
+  width: min(860px, 100%);
+  max-height: min(88vh, 920px);
+  border-radius: 30px;
+  padding: 22px;
   overflow: hidden;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px;
-  border-bottom: 1px solid #eee;
-}
-
-.modal-header h3 {
-  margin: 0;
-  color: #333;
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  font-size: 24px;
-  cursor: pointer;
-  color: #666;
-}
-
-.modal-body {
-  padding: 20px;
-  overflow-y: auto;
-  max-height: 60vh;
-}
-
-.print-history-list {
   display: flex;
   flex-direction: column;
-  gap: 15px;
 }
 
-.history-item {
-  padding: 15px;
-  border: 1px solid #eee;
-  border-radius: 8px;
-  background: #f8f9fa;
-}
-
-.job-header {
+.history-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 18px;
 }
 
-.job-number {
-  font-weight: 600;
-  color: #333;
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  font-size: 1.35rem;
 }
 
-.job-status {
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+.history-list {
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
-.job-status.PENDING {
-  background: #fff3cd;
-  color: #856404;
-}
-
-.job-status.PROCESSING {
-  background: #d1ecf1;
-  color: #0c5460;
-}
-
-.job-status.COMPLETED {
-  background: #d4edda;
-  color: #155724;
-}
-
-.job-status.FAILED {
-  background: #f8d7da;
-  color: #721c24;
-}
-
-.job-details {
+.history-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 15px;
-  font-size: 12px;
-  color: #666;
+  gap: 12px;
+  margin-top: 12px;
+  font-size: 0.88rem;
+}
+
+.empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 32px 20px;
+  text-align: center;
+  border-radius: 22px;
+  border: 1px dashed rgba(148, 163, 184, 0.26);
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.empty-state.large {
+  min-height: 260px;
+  place-content: center;
+}
+
+.empty-state.compact {
+  padding: 20px 14px;
+}
+
+@media (max-width: 1360px) {
+  .print-layout {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+
+  .template-panel {
+    grid-column: 1 / -1;
+    position: static;
+  }
+}
+
+@media (max-width: 960px) {
+  .print-center {
+    padding: 16px;
+  }
+
+  .hero-card {
+    flex-direction: column;
+    border-radius: 26px;
+  }
+
+  .hero-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .hero-actions .ghost-btn,
+  .hero-actions .primary-btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .print-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .action-panel,
+  .template-panel {
+    position: static;
+  }
+
+  .source-toolbar,
+  .option-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar-actions {
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 640px) {
+  .print-center {
+    padding: 12px;
+  }
+
+  .hero-card,
+  .workspace-panel,
+  .history-modal {
+    border-radius: 24px;
+  }
+
+  .hero-metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .type-switcher,
+  .source-tabs,
+  .record-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-actions,
+  .toolbar-actions,
+  .history-actions {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .ghost-btn,
+  .primary-btn {
+    width: 100%;
+  }
+
+  .record-title-row,
+  .panel-topline,
+  .history-top,
+  .history-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .history-modal {
+    max-height: calc(100dvh - 24px);
+    padding: 18px;
+  }
 }
 </style>
-

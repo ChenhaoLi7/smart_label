@@ -10,6 +10,19 @@ axios.interceptors.request.use(config => {
   }
   return config
 })
+
+// 关闭并清理 Service Worker 缓存，避免旧前端包导致权限 UI 失真
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    registrations.forEach((registration) => registration.unregister())
+  })
+  if (window.caches && typeof window.caches.keys === 'function') {
+    window.caches.keys().then((keys) => {
+      keys.forEach((key) => window.caches.delete(key))
+    })
+  }
+}
+
 createApp(App)
   .use(router)    
   .mount('#app')

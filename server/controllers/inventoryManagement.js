@@ -1,27 +1,129 @@
-const { Item, Bin, Lot, Transaction } = require('../models')
+const {
+  Item,
+  Bin,
+  Lot,
+  Transaction,
+  Inventory,
+  PurchaseOrderLine,
+  SalesOrderLine,
+  BOMHeader,
+  BOMLine,
+  WorkOrder,
+  WorkOrderConsumption,
+  WorkOrderOutput
+} = require('../models')
 const { Op } = require('sequelize')
+const sequelize = require('../config/database')
+
+const parsePositiveInt = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const normalizeSortOrder = (value, fallback = 'ASC') => {
+  return String(value || fallback).toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
+}
+
+const parseOptionalNonNegativeInt = (value, fallback = null) => {
+  if (value === undefined) return fallback
+  if (value === null || value === '') return null
+
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : Number.NaN
+}
+
+const parseOptionalPrice = (value, fallback = null) => {
+  if (value === undefined) return fallback
+  if (value === null || value === '') return null
+
+  const parsed = Number.parseFloat(value)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return Number.NaN
+  }
+
+  return Number(parsed.toFixed(2))
+}
+
+const normalizeOptionalText = (value) => {
+  if (value === undefined || value === null) return null
+  const normalized = String(value).trim()
+  return normalized || null
+}
+
+const sortFieldMaps = {
+  items: {
+    sku: 'sku',
+    name: 'name',
+    price: 'price',
+    totalQty: 'sku',
+    availableQty: 'sku',
+    status: 'status',
+    createdAt: 'createdAt'
+  },
+  lots: {
+    lot: 'lot_number',
+    lot_number: 'lot_number',
+    sku: 'sku',
+    qty: 'qty',
+    exp: 'expiry_date',
+    expiry_date: 'expiry_date',
+    status: 'status',
+    createdAt: 'createdAt'
+  },
+  bins: {
+    bin_code: 'bin_code',
+    zone: 'zone',
+    capacity: 'capacity',
+    used: 'used',
+    utilization: 'bin_code',
+    status: 'status',
+    createdAt: 'createdAt'
+  },
+  transactions: {
+    timestamp: 'transactionTime',
+    transactionTime: 'transactionTime',
+    type: 'transactionType',
+    transactionType: 'transactionType',
+    user: 'operator',
+    operator: 'operator',
+    itemCode: 'itemCode',
+    createdAt: 'createdAt'
+  }
+}
+
+const resolveSortField = (scope, requested, fallback) => {
+  return sortFieldMaps[scope]?.[requested] || fallback
+}
+
+const getAvailableLotQuantity = (lots = []) => {
+  return lots.reduce((sum, lot) => {
+    if (lot.status !== 'ACTIVE') return sum
+    return sum + Number(lot.qty || 0)
+  }, 0)
+}
 
 // 获取库存概览统计
 const getInventoryStats = async (req, res) => {
   try {
     const [
-      totalItems,
+      activeItems,
       totalLots,
       totalBins,
-      lowStockItems,
       expiredLots,
       todayTransactions
     ] = await Promise.all([
-      Item.count({ where: { status: 'ACTIVE' } }),
+      Item.findAll({
+        where: { status: 'ACTIVE' },
+        attributes: ['id', 'min_stock'],
+        include: [{
+          model: Lot,
+          as: 'lots',
+          attributes: ['qty', 'status'],
+          required: false
+        }]
+      }),
       Lot.count({ where: { status: 'ACTIVE' } }),
       Bin.count({ where: { status: 'ACTIVE' } }),
-      Item.count({
-        where: {
-          status: 'ACTIVE',
-          '$lots.qty$': { [Op.lte]: 10 } // 库存少于10的商品
-        },
-        include: [{ model: Lot, as: 'lots' }]
-      }),
       Lot.count({
         where: {
           status: 'ACTIVE',
@@ -36,6 +138,13 @@ const getInventoryStats = async (req, res) => {
         }
       })
     ])
+
+    const totalItems = activeItems.length
+    const lowStockItems = activeItems.reduce((count, item) => {
+      const availableQty = getAvailableLotQuantity(item.lots)
+      const minStock = Number(item.min_stock || 0)
+      return count + (availableQty <= minStock ? 1 : 0)
+    }, 0)
 
     // 计算库位利用率 - count unique bin_ids
     const usedBins = await Lot.count({
@@ -86,12 +195,17 @@ const getItems = async (req, res) => {
       ]
     }
 
-    const offset = (page - 1) * limit
+    const pageNumber = parsePositiveInt(page, 1)
+    const pageSize = parsePositiveInt(limit, 20)
+    const offset = (pageNumber - 1) * pageSize
+    const safeSortBy = resolveSortField('items', sortBy, 'sku')
+    const safeSortOrder = normalizeSortOrder(sortOrder)
+
     const { count, rows } = await Item.findAndCountAll({
       where: whereClause,
-      order: [[sortBy, sortOrder.toUpperCase()]],
-      limit: parseInt(limit),
-      offset: parseInt(offset),
+      order: [[safeSortBy, safeSortOrder]],
+      limit: pageSize,
+      offset,
       include: [{
         model: Lot,
         as: 'lots',
@@ -121,9 +235,9 @@ const getItems = async (req, res) => {
         items: itemsWithStock,
         pagination: {
           total: count,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(count / limit)
+          page: pageNumber,
+          limit: pageSize,
+          totalPages: Math.ceil(count / pageSize)
         }
       }
     })
@@ -132,6 +246,239 @@ const getItems = async (req, res) => {
     res.status(500).json({
       success: false,
       message: '获取商品列表失败',
+      error: error.message
+    })
+  }
+}
+
+// 创建新商品
+const createItem = async (req, res) => {
+  try {
+    const { sku, name, description, category, uom, min_stock, max_stock, price } = req.body
+    const normalizedSku = String(sku || '').trim()
+    const normalizedName = String(name || '').trim()
+    const normalizedMinStock = parseOptionalNonNegativeInt(min_stock, 0)
+    const normalizedMaxStock = parseOptionalNonNegativeInt(max_stock, null)
+    const normalizedPrice = parseOptionalPrice(price, null)
+
+    if (!normalizedSku || !normalizedName) {
+      return res.status(400).json({
+        success: false,
+        message: 'SKU 和商品名称不能为空'
+      })
+    }
+
+    if (Number.isNaN(normalizedMinStock) || Number.isNaN(normalizedMaxStock)) {
+      return res.status(400).json({
+        success: false,
+        message: '库存阈值必须是大于等于 0 的整数'
+      })
+    }
+
+    if (Number.isNaN(normalizedPrice)) {
+      return res.status(400).json({
+        success: false,
+        message: '价格必须是大于等于 0 的数字'
+      })
+    }
+
+    // 检查 SKU 是否已存在
+    const existing = await Item.findOne({ where: { sku: normalizedSku } })
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: '该 SKU 编码已存在'
+      })
+    }
+
+    const newItem = await sequelize.transaction(async (transaction) => Item.create({
+      sku: normalizedSku,
+      name: normalizedName,
+      description: normalizeOptionalText(description),
+      category: normalizeOptionalText(category),
+      uom: normalizeOptionalText(uom) || 'pcs',
+      price: normalizedPrice,
+      min_stock: normalizedMinStock ?? 0,
+      max_stock: normalizedMaxStock,
+      status: 'ACTIVE',
+      created_by: req.user?.username || 'system',
+      updated_by: req.user?.username || 'system'
+    }, { transaction }))
+
+    res.json({
+      success: true,
+      data: newItem,
+      message: '商品创建成功'
+    })
+  } catch (error) {
+    console.error('创建商品失败:', error)
+    res.status(500).json({
+      success: false,
+      message: '创建商品失败',
+      error: error.message
+    })
+  }
+}
+
+// 更新商品资料（支持 SKU 级联修改）
+const updateItem = async (req, res) => {
+  try {
+    const currentSku = String(req.params.sku || '').trim()
+    const {
+      sku,
+      name,
+      description,
+      category,
+      uom,
+      min_stock,
+      max_stock,
+      price,
+      status
+    } = req.body
+
+    const normalizedSku = String(sku || currentSku).trim()
+    const normalizedName = String(name || '').trim()
+    const normalizedMinStock = parseOptionalNonNegativeInt(min_stock, 0)
+    const normalizedMaxStock = parseOptionalNonNegativeInt(max_stock, null)
+    const normalizedPrice = parseOptionalPrice(price, null)
+    const normalizedStatus = String(status || 'ACTIVE').trim().toUpperCase()
+    const allowedStatuses = new Set(['ACTIVE', 'INACTIVE', 'DISCONTINUED'])
+
+    if (!currentSku || !normalizedSku || !normalizedName) {
+      return res.status(400).json({
+        success: false,
+        message: 'SKU 和商品名称不能为空'
+      })
+    }
+
+    if (Number.isNaN(normalizedMinStock) || Number.isNaN(normalizedMaxStock)) {
+      return res.status(400).json({
+        success: false,
+        message: '库存阈值必须是大于等于 0 的整数'
+      })
+    }
+
+    if (Number.isNaN(normalizedPrice)) {
+      return res.status(400).json({
+        success: false,
+        message: '价格必须是大于等于 0 的数字'
+      })
+    }
+
+    if (!allowedStatuses.has(normalizedStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: '商品状态不合法'
+      })
+    }
+
+    const item = await Item.findOne({ where: { sku: currentSku } })
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: `SKU ${currentSku} 不存在`
+      })
+    }
+
+    if (normalizedSku !== currentSku) {
+      const skuTaken = await Item.findOne({ where: { sku: normalizedSku } })
+      if (skuTaken) {
+        return res.status(400).json({
+          success: false,
+          message: `SKU ${normalizedSku} 已存在`
+        })
+      }
+    }
+
+    const skuChanged = normalizedSku !== currentSku
+    const nameChanged = normalizedName !== item.name
+    const itemPayload = {
+      sku: normalizedSku,
+      name: normalizedName,
+      description: normalizeOptionalText(description),
+      category: normalizeOptionalText(category),
+      uom: normalizeOptionalText(uom) || 'pcs',
+      price: normalizedPrice,
+      min_stock: normalizedMinStock ?? 0,
+      max_stock: normalizedMaxStock,
+      status: normalizedStatus,
+      updated_by: req.user?.username || 'system'
+    }
+
+    await sequelize.transaction(async (transaction) => {
+      await item.update(itemPayload, { transaction })
+
+      const crossReferenceUpdates = []
+      const inventoryPayload = {}
+      const transactionPayload = {}
+
+      if (skuChanged) {
+        inventoryPayload.itemCode = normalizedSku
+        transactionPayload.itemCode = normalizedSku
+
+        crossReferenceUpdates.push(
+          Lot.update({ sku: normalizedSku }, { where: { sku: currentSku }, transaction }),
+          PurchaseOrderLine.update({ sku: normalizedSku }, { where: { sku: currentSku }, transaction }),
+          SalesOrderLine.update({ sku: normalizedSku }, { where: { sku: currentSku }, transaction }),
+          BOMHeader.update({ sku: normalizedSku }, { where: { sku: currentSku }, transaction }),
+          BOMLine.update({ component_sku: normalizedSku }, { where: { component_sku: currentSku }, transaction }),
+          WorkOrder.update({ sku: normalizedSku }, { where: { sku: currentSku }, transaction }),
+          WorkOrderConsumption.update({ component_sku: normalizedSku }, { where: { component_sku: currentSku }, transaction }),
+          WorkOrderOutput.update({ sku: normalizedSku }, { where: { sku: currentSku }, transaction })
+        )
+      }
+
+      if (nameChanged) {
+        inventoryPayload.itemName = normalizedName
+        transactionPayload.itemName = normalizedName
+      }
+
+      if (Object.keys(inventoryPayload).length > 0) {
+        crossReferenceUpdates.push(
+          Inventory.update(inventoryPayload, { where: { itemCode: currentSku }, transaction })
+        )
+      }
+
+      if (Object.keys(transactionPayload).length > 0) {
+        crossReferenceUpdates.push(
+          Transaction.update(transactionPayload, { where: { itemCode: currentSku }, transaction })
+        )
+      }
+
+      if (crossReferenceUpdates.length > 0) {
+        await Promise.all(crossReferenceUpdates)
+      }
+    })
+
+    const updatedItem = await Item.findOne({
+      where: { sku: normalizedSku },
+      include: [{
+        model: Lot,
+        as: 'lots',
+        attributes: ['qty', 'bin_id', 'status']
+      }]
+    })
+
+    const lots = updatedItem?.lots || []
+    const itemWithStock = {
+      ...updatedItem.toJSON(),
+      totalQty: lots.reduce((sum, lot) => sum + Number(lot.qty || 0), 0),
+      availableQty: lots
+        .filter((lot) => lot.status === 'ACTIVE')
+        .reduce((sum, lot) => sum + Number(lot.qty || 0), 0),
+      binCount: new Set(lots.map((lot) => lot.bin_id)).size
+    }
+
+    res.json({
+      success: true,
+      data: itemWithStock,
+      message: skuChanged ? '商品更新成功，关联 SKU 已同步' : '商品更新成功'
+    })
+  } catch (error) {
+    console.error('更新商品失败:', error)
+    res.status(500).json({
+      success: false,
+      message: '更新商品失败',
       error: error.message
     })
   }
@@ -150,12 +497,17 @@ const getLots = async (req, res) => {
       ]
     }
 
-    const offset = (page - 1) * limit
+    const pageNumber = parsePositiveInt(page, 1)
+    const pageSize = parsePositiveInt(limit, 20)
+    const offset = (pageNumber - 1) * pageSize
+    const safeSortBy = resolveSortField('lots', sortBy, 'lot_number')
+    const safeSortOrder = normalizeSortOrder(sortOrder)
+
     const { count, rows } = await Lot.findAndCountAll({
       where: whereClause,
-      order: [[sortBy, sortOrder.toUpperCase()]],
-      limit: parseInt(limit),
-      offset: parseInt(offset),
+      order: [[safeSortBy, safeSortOrder]],
+      limit: pageSize,
+      offset,
       include: [
         {
           model: Item,
@@ -176,9 +528,9 @@ const getLots = async (req, res) => {
         lots: rows,
         pagination: {
           total: count,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(count / limit)
+          page: pageNumber,
+          limit: pageSize,
+          totalPages: Math.ceil(count / pageSize)
         }
       }
     })
@@ -205,12 +557,17 @@ const getBins = async (req, res) => {
       ]
     }
 
-    const offset = (page - 1) * limit
+    const pageNumber = parsePositiveInt(page, 1)
+    const pageSize = parsePositiveInt(limit, 20)
+    const offset = (pageNumber - 1) * pageSize
+    const safeSortBy = resolveSortField('bins', sortBy, 'bin_code')
+    const safeSortOrder = normalizeSortOrder(sortOrder)
+
     const { count, rows } = await Bin.findAndCountAll({
       where: whereClause,
-      order: [[sortBy, sortOrder.toUpperCase()]],
-      limit: parseInt(limit),
-      offset: parseInt(offset),
+      order: [[safeSortBy, safeSortOrder]],
+      limit: pageSize,
+      offset,
       include: [{
         model: Lot,
         as: 'lots',
@@ -237,9 +594,9 @@ const getBins = async (req, res) => {
         bins: binsWithUtilization,
         pagination: {
           total: count,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(count / limit)
+          page: pageNumber,
+          limit: pageSize,
+          totalPages: Math.ceil(count / pageSize)
         }
       }
     })
@@ -256,22 +613,27 @@ const getBins = async (req, res) => {
 // 获取交易记录
 const getTransactions = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search, sortBy = 'createdAt', sortOrder = 'DESC' } = req.query
+    const { page = 1, limit = 20, search, sortBy = 'transactionTime', sortOrder = 'DESC' } = req.query
 
     const whereClause = {}
     if (search) {
       whereClause[Op.or] = [
-        { sku: { [Op.like]: `%${search}%` } },
+        { itemCode: { [Op.like]: `%${search}%` } },
         { operator: { [Op.like]: `%${search}%` } }
       ]
     }
 
-    const offset = (page - 1) * limit
+    const pageNumber = parsePositiveInt(page, 1)
+    const pageSize = parsePositiveInt(limit, 20)
+    const offset = (pageNumber - 1) * pageSize
+    const safeSortBy = resolveSortField('transactions', sortBy, 'transactionTime')
+    const safeSortOrder = normalizeSortOrder(sortOrder, 'DESC')
+
     const { count, rows } = await Transaction.findAndCountAll({
       where: whereClause,
-      order: [[sortBy, sortOrder.toUpperCase()]],
-      limit: parseInt(limit),
-      offset: parseInt(offset)
+      order: [[safeSortBy, safeSortOrder]],
+      limit: pageSize,
+      offset
     })
 
     res.json({
@@ -280,9 +642,9 @@ const getTransactions = async (req, res) => {
         transactions: rows,
         pagination: {
           total: count,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(count / limit)
+          page: pageNumber,
+          limit: pageSize,
+          totalPages: Math.ceil(count / pageSize)
         }
       }
     })
@@ -448,13 +810,83 @@ const adjustInventory = async (req, res) => {
   }
 }
 
+const updateLot = async (req, res) => {
+  try {
+    const lotNumber = String(req.params.lotNumber || '').trim()
+    const { expiry_date } = req.body
+
+    if (!lotNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Lot number is required'
+      })
+    }
+
+    const lot = await Lot.findOne({
+      where: { lot_number: lotNumber },
+      include: [
+        { model: Item, as: 'item' },
+        { model: Bin, as: 'bin', attributes: ['id', 'bin_code', 'zone'] }
+      ]
+    })
+
+    if (!lot) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lot not found'
+      })
+    }
+
+    const normalizedExpiry = expiry_date === '' || expiry_date === null || expiry_date === undefined
+      ? null
+      : new Date(expiry_date)
+
+    if (normalizedExpiry && Number.isNaN(normalizedExpiry.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Expiry date is invalid'
+      })
+    }
+
+    await lot.update({
+      expiry_date: normalizedExpiry,
+      updated_by: req.user?.username || 'system'
+    })
+
+    const refreshedLot = await Lot.findOne({
+      where: { lot_number: lotNumber },
+      include: [
+        { model: Item, as: 'item' },
+        { model: Bin, as: 'bin', attributes: ['id', 'bin_code', 'zone'] }
+      ]
+    })
+
+    return res.json({
+      success: true,
+      message: 'Lot updated successfully',
+      data: {
+        lot: refreshedLot
+      }
+    })
+  } catch (error) {
+    console.error('更新批次失败:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update lot',
+      error: error.message
+    })
+  }
+}
+
 module.exports = {
   getInventoryStats,
   getItems,
+  createItem,
+  updateItem,
   getLots,
   getBins,
   getTransactions,
   exportInventoryData,
-  adjustInventory
+  adjustInventory,
+  updateLot
 }
-
