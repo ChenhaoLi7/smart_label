@@ -48,6 +48,24 @@ const drawCrop = (video, canvas, crop) => {
   )
 }
 
+const rotateCanvasInto = (sourceCanvas, targetCanvas, degrees) => {
+  const ctx = getContext(targetCanvas)
+  const radians = (degrees * Math.PI) / 180
+
+  ctx.save()
+  ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height)
+  ctx.translate(targetCanvas.width / 2, targetCanvas.height / 2)
+  ctx.rotate(radians)
+  ctx.drawImage(
+    sourceCanvas,
+    -sourceCanvas.width / 2,
+    -sourceCanvas.height / 2,
+    sourceCanvas.width,
+    sourceCanvas.height
+  )
+  ctx.restore()
+}
+
 const buildScanHints = () => new Map([
   [DecodeHintType.TRY_HARDER, true],
   [DecodeHintType.POSSIBLE_FORMATS, DEFAULT_FORMATS]
@@ -299,6 +317,7 @@ export const buildDecodeCandidatesFromVideo = (video, cache, metrics, options = 
   const roi = buildCenteredRoi(video)
   const squareRoi = buildSquareRoi(video)
   const includeFullFrame = options.includeFullFrame === true
+  const enableTiltAssist = options.enableTiltAssist !== false
   const targetWidth = clamp(Math.round(roi.width), 480, 960)
   const targetHeight = clamp(Math.round(roi.height), 220, 540)
 
@@ -308,6 +327,14 @@ export const buildDecodeCandidatesFromVideo = (video, cache, metrics, options = 
   const candidates = [
     { label: 'roi-base', canvas: roiCanvas }
   ]
+
+  if (enableTiltAssist) {
+    [-14, -8, 8, 14].forEach((angle) => {
+      const rotatedCanvas = ensureCanvas(cache, `roiTilt${angle}`, targetWidth, targetHeight)
+      rotateCanvasInto(roiCanvas, rotatedCanvas, angle)
+      candidates.push({ label: `roi-tilt-${angle}`, canvas: rotatedCanvas })
+    })
+  }
 
   const enhancedCanvas = ensureCanvas(cache, 'enhancedCanvas', targetWidth, targetHeight)
   enhanceLowLight(roiCanvas, enhancedCanvas, metrics)
@@ -321,6 +348,14 @@ export const buildDecodeCandidatesFromVideo = (video, cache, metrics, options = 
   const squareCanvas = ensureCanvas(cache, 'squareCanvas', squareSize, squareSize)
   drawCrop(video, squareCanvas, squareRoi)
   candidates.push({ label: 'center-square', canvas: squareCanvas })
+
+  if (enableTiltAssist) {
+    [-10, 10].forEach((angle) => {
+      const rotatedSquareCanvas = ensureCanvas(cache, `squareTilt${angle}`, squareSize, squareSize)
+      rotateCanvasInto(squareCanvas, rotatedSquareCanvas, angle)
+      candidates.push({ label: `square-tilt-${angle}`, canvas: rotatedSquareCanvas })
+    })
+  }
 
   if (includeFullFrame) {
     const fullWidth = clamp(video.videoWidth || 1280, 640, 1280)

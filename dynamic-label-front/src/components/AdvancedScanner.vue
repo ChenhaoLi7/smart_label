@@ -23,10 +23,22 @@
           <video 
             ref="videoRef" 
             autoplay 
-            playsinline 
+            playsinline
+            webkit-playsinline="true"
+            muted
             class="camera-video"
-            :class="{ scanning: isScanning }"
+            :class="{ scanning: isScanning, ready: isVideoFrameReady, pending: !isVideoFrameReady }"
+            @loadeddata="handleVideoFrameReady"
+            @canplay="handleVideoFrameReady"
+            @playing="handleVideoFrameReady"
           ></video>
+
+          <div v-if="isScanning && !isVideoFrameReady" class="camera-stage-placeholder">
+            <div class="camera-stage-placeholder-copy">
+              <strong>Opening camera</strong>
+              <p>Preparing the live preview…</p>
+            </div>
+          </div>
           
           <!-- 扫描框 -->
           <div class="scan-overlay">
@@ -43,7 +55,7 @@
         <!-- 摄像头控制 -->
         <div class="camera-controls">
           <button @click="toggleCamera" class="control-btn">
-            {{ isScanning ? 'Stop Scan' : 'Start Scan' }}
+            {{ isScanning ? 'Stop Scan' : 'Retry Camera' }}
           </button>
           <button @click="switchCamera" class="control-btn" v-if="devices.length > 1">
             Switch Camera
@@ -373,12 +385,34 @@
               </div>
             </div>
           </div>
-          <div v-if="isOutboundFifoMode" class="form-group">
+          <div v-if="isOutboundFifoMode && canChooseOutboundLot" class="form-group">
+            <label>Outbound Mode</label>
+            <div class="outbound-mode-toggle">
+              <button
+                type="button"
+                class="outbound-mode-btn"
+                :class="{ active: outboundSelectionMode === 'AUTO' }"
+                @click="outboundSelectionMode = 'AUTO'; syncOutboundCandidate()"
+              >
+                FIFO Auto
+              </button>
+              <button
+                type="button"
+                class="outbound-mode-btn"
+                :class="{ active: outboundSelectionMode === 'MANUAL' }"
+                @click="outboundSelectionMode = 'MANUAL'; syncOutboundCandidate()"
+              >
+                Choose Lot
+              </button>
+            </div>
+            <p class="form-hint">FIFO is still the default, but you can switch to a specific lot whenever you need exact batch control.</p>
+          </div>
+          <div v-if="isOutboundAutoMode" class="form-group">
             <label>Deduction Strategy</label>
             <input type="text" value="FIFO · oldest lot first" disabled class="input-field disabled-input">
             <p class="form-hint">Scanning an item label will now deduct from the oldest active lot first, then continue forward only if more stock is needed.</p>
           </div>
-          <div v-if="isOutboundFifoMode" class="form-group">
+          <div v-if="isOutboundAutoMode" class="form-group">
             <label>FIFO Plan</label>
             <div class="outbound-plan-list">
               <div
@@ -407,14 +441,14 @@
                 {{ formatOutboundCandidateLabel(candidate) }}
               </option>
             </select>
-            <p class="form-hint">This item exists in multiple bins, so please choose the exact source location to deduct from.</p>
+            <p class="form-hint">Choose the exact lot and bin you want to deduct from.</p>
           </div>
           <div class="form-group">
-            <label>{{ isOutboundFifoMode ? 'Lot Sequence' : 'Lot Number' }}</label>
+            <label>{{ isOutboundAutoMode ? 'Lot Sequence' : 'Lot Number' }}</label>
             <input type="text" v-model="outboundForm.lot_number" disabled class="input-field disabled-input">
           </div>
           <div class="form-group">
-            <label>{{ isOutboundFifoMode ? 'Source Bins' : 'Source Bin' }}</label>
+            <label>{{ isOutboundAutoMode ? 'Source Bins' : 'Source Bin' }}</label>
             <input type="text" v-model="outboundForm.source_bin_code" disabled class="input-field disabled-input">
           </div>
           <div class="form-group">
@@ -438,11 +472,15 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  applyPreferredTrackConstraints,
+  buildDecodeCandidatesFromVideo,
   buildPreferredVideoConstraints,
-  createEnhancedCodeReader
+  computeFrameMetrics,
+  createEnhancedCodeReader,
+  decodeFromCandidates
 } from '@/utils/enhancedScanner'
 // import QRCode from 'qrcode' // 暂时注释，后续会用到
 
@@ -465,6 +503,7 @@ const scanResult = ref(null)
 const scanAction = ref(null) // 保存后端的 action 标识
 const statusMessage = ref('')
 const statusType = ref('info')
+const isVideoFrameReady = ref(false)
 const manualCode = ref('')
 const devices = ref([])
 const selectedDevice = ref('')
@@ -541,6 +580,7 @@ const isSubmittingOutbound = ref(false)
 const outboundCandidates = ref([])
 const selectedOutboundLotKey = ref('')
 const outboundStrategy = ref('DIRECT')
+const outboundSelectionMode = ref('AUTO')
 const outboundForm = ref({
   sku: '',
   item_name: '',
@@ -756,6 +796,8 @@ const moveTargetBins = computed(() => {
   return availableBins.value.filter((bin) => bin.bin_code !== currentBinCode)
 })
 const isOutboundFifoMode = computed(() => outboundStrategy.value === 'FIFO')
+const canChooseOutboundLot = computed(() => outboundCandidates.value.length > 1)
+const isOutboundAutoMode = computed(() => isOutboundFifoMode.value && outboundSelectionMode.value === 'AUTO')
 const totalOutboundAvailableQty = computed(() => (
   outboundCandidates.value.reduce((sum, candidate) => sum + Number(candidate.available_qty || 0), 0)
 ))
@@ -777,10 +819,10 @@ const outboundWorkflowGuide = computed(() => {
 
     if (activeLots.length > 1) {
       return [
-        'Scanning an item label uses FIFO automatic deduction across the oldest active lots.',
+        'Scanning an item label defaults to FIFO deduction across the oldest active lots.',
         lotsWithExpiry.length
-          ? 'Expiry dates are available on some lots. If expiry matters more than FIFO, scan the lot label you want before confirming outbound.'
-          : 'If you need an exact batch or location instead of FIFO, scan the lot label directly.'
+          ? 'Expiry dates are available on some lots. You can switch to Choose Lot if you want to deduct a specific batch instead of FIFO.'
+          : 'You can keep FIFO Auto, or switch to Choose Lot when you need an exact batch or bin.'
       ]
     }
 
@@ -992,7 +1034,7 @@ const sortOutboundCandidatesForFifo = (candidates) => {
 }
 
 const syncOutboundCandidate = () => {
-  if (isOutboundFifoMode.value) {
+  if (isOutboundAutoMode.value) {
     const firstCandidate = outboundCandidates.value[0]
     const totalAvailable = totalOutboundAvailableQty.value
     const boundedQty = Math.min(
@@ -1067,24 +1109,103 @@ const resolveOutboundCandidates = () => {
   return { error: 'Please scan an item label or a lot label before outbound.' }
 }
 
-const ensureScanCanvas = (key, width, height) => {
-  if (!scanCanvasCache[key]) {
-    scanCanvasCache[key] = document.createElement('canvas')
-  }
-
-  const canvas = scanCanvasCache[key]
-  if (canvas.width !== width) canvas.width = width
-  if (canvas.height !== height) canvas.height = height
-  return canvas
+const resolveScanLabelType = (parsed, action = '') => {
+  if (parsed?.lot) return 'LOT'
+  if (parsed?.bin) return 'BIN'
+  if (parsed?.item) return 'ITEM'
+  if (action === 'CREATE_ITEM') return 'NEW_ITEM'
+  return 'UNKNOWN'
 }
 
-const tryDecodeCanvas = (canvas) => {
+const createBenchmarkSession = (mode = currentMode.value) => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  mode,
+  startedAt: new Date().toISOString(),
+  startPerf: performance.now(),
+  status: 'pending',
+  frameSamples: 0,
+  frameScoreTotal: 0,
+  brightnessTotal: 0,
+  lowLightFrames: 0,
+  blurryFrames: 0,
+  decodeAttempts: 0,
+  deviceId: selectedDevice.value || '',
+  deviceLabel: formatCameraLabel(
+    devices.value.find((device) => device.deviceId === selectedDevice.value) || {},
+    Math.max(devices.value.findIndex((device) => device.deviceId === selectedDevice.value), 0)
+  ),
+  labelType: 'PENDING',
+  lockMs: null,
+  completedAt: null
+})
+
+const activeBenchmarkSession = ref(null)
+
+const postBenchmarkSession = async (sessionPayload) => {
+  const token = localStorage.getItem('token')
+  if (!token) return
+
   try {
-    const result = getCodeReader().decodeFromCanvas(canvas)
-    if (!result?.getText?.()) return ''
-    return String(result.getText()).trim()
+    await fetch('/api/scan/benchmark', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(sessionPayload),
+      keepalive: true
+    })
   } catch (error) {
-    return ''
+    console.warn('Failed to send scanner benchmark session:', error)
+  }
+}
+
+const beginBenchmarkSession = (mode = currentMode.value) => {
+  activeBenchmarkSession.value = createBenchmarkSession(mode)
+}
+
+const ensureBenchmarkSession = (mode = currentMode.value) => {
+  if (!activeBenchmarkSession.value || activeBenchmarkSession.value.status !== 'pending') {
+    beginBenchmarkSession(mode)
+  }
+}
+
+const captureBenchmarkFrame = (metrics) => {
+  if (!activeBenchmarkSession.value || !metrics) return
+
+  activeBenchmarkSession.value.frameSamples += 1
+  activeBenchmarkSession.value.frameScoreTotal += Number(metrics.score || 0)
+  activeBenchmarkSession.value.brightnessTotal += Number(metrics.brightness || 0)
+  if (metrics.lowLight) activeBenchmarkSession.value.lowLightFrames += 1
+  if (metrics.blurry) activeBenchmarkSession.value.blurryFrames += 1
+}
+
+const finalizeBenchmarkSession = ({ status, labelType = 'UNKNOWN', rawData = '' } = {}) => {
+  if (!activeBenchmarkSession.value) return
+
+  const session = activeBenchmarkSession.value
+  const completedAt = Date.now()
+  const lockMs = performance.now() - session.startPerf
+  const avgFrameScore = session.frameSamples ? session.frameScoreTotal / session.frameSamples : 0
+  const avgBrightness = session.frameSamples ? session.brightnessTotal / session.frameSamples : 0
+
+  const completedSession = {
+    ...session,
+    status,
+    labelType,
+    rawData,
+    completedAt,
+    completedAtIso: new Date(completedAt).toISOString(),
+    lockMs,
+    avgFrameScore,
+    avgBrightness
+  }
+
+  activeBenchmarkSession.value = null
+  void postBenchmarkSession(completedSession)
+
+  if (isScanning.value) {
+    beginBenchmarkSession('camera')
   }
 }
 
@@ -1093,25 +1214,15 @@ const decodeCurrentVideoFrame = (video) => {
   const videoHeight = video.videoHeight || 0
   if (!videoWidth || !videoHeight) return ''
 
-  const roiWidth = Math.min(videoWidth * 0.82, videoWidth)
-  const roiHeight = Math.min(videoHeight * 0.5, videoHeight)
-  const roiX = Math.max((videoWidth - roiWidth) / 2, 0)
-  const roiY = Math.max((videoHeight - roiHeight) / 2, 0)
+  const metrics = computeFrameMetrics(video, scanCanvasCache)
+  const includeFullFrame = metrics.lowLight || metrics.blurry
+  const candidates = buildDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+    includeFullFrame,
+    enableTiltAssist: true
+  })
 
-  const roiCanvas = ensureScanCanvas('roiCanvas', Math.round(roiWidth), Math.round(roiHeight))
-  const roiCtx = roiCanvas.getContext('2d', { willReadFrequently: true })
-  roiCtx.drawImage(video, roiX, roiY, roiWidth, roiHeight, 0, 0, roiCanvas.width, roiCanvas.height)
-
-  const roiResult = tryDecodeCanvas(roiCanvas)
-  if (roiResult) return roiResult
-
-  const fullWidth = Math.min(videoWidth, 1280)
-  const fullHeight = Math.min(videoHeight, 720)
-  const fullCanvas = ensureScanCanvas('fullCanvas', Math.round(fullWidth), Math.round(fullHeight))
-  const fullCtx = fullCanvas.getContext('2d', { willReadFrequently: true })
-  fullCtx.drawImage(video, 0, 0, videoWidth, videoHeight, 0, 0, fullCanvas.width, fullCanvas.height)
-
-  return tryDecodeCanvas(fullCanvas)
+  const decoded = decodeFromCandidates(getCodeReader(), candidates)
+  return decoded?.text ? String(decoded.text).trim() : ''
 }
 
 const stopScanLoop = () => {
@@ -1134,6 +1245,10 @@ const runEnhancedScanLoop = () => {
   lastDecodeAttemptAt = now
   if (isHandlingScan.value) return
 
+  ensureBenchmarkSession('camera')
+  activeBenchmarkSession.value.decodeAttempts += 1
+  captureBenchmarkFrame(computeFrameMetrics(video, scanCanvasCache))
+
   const decodedText = decodeCurrentVideoFrame(video)
   if (!decodedText) return
 
@@ -1145,6 +1260,7 @@ let codeReader = null
 let stream = null
 let scanLoopFrame = null
 let lastDecodeAttemptAt = 0
+let cameraStartupHintTimer = null
 
 // 生命周期
 onMounted(async () => {
@@ -1161,7 +1277,7 @@ onMounted(async () => {
     void ensureBinsLoaded()
   }
   if (currentMode.value === 'camera') {
-    await startScanning()
+    await autoStartCamera()
   }
 })
 
@@ -1239,6 +1355,228 @@ const listDevices = async () => {
   }
 }
 
+const waitForVideoMetadata = (videoEl, timeoutMs = 900) => new Promise((resolve) => {
+  if (!videoEl) {
+    resolve()
+    return
+  }
+
+  if (videoEl.readyState >= 1) {
+    resolve()
+    return
+  }
+
+  const handleReady = () => {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    videoEl.removeEventListener('loadedmetadata', handleReady)
+    videoEl.removeEventListener('loadeddata', handleReady)
+    resolve()
+  }
+
+  const timer = window.setTimeout(() => {
+    videoEl.removeEventListener('loadedmetadata', handleReady)
+    videoEl.removeEventListener('loadeddata', handleReady)
+    resolve()
+  }, timeoutMs)
+
+  videoEl.addEventListener('loadedmetadata', handleReady, { once: true })
+  videoEl.addEventListener('loadeddata', handleReady, { once: true })
+})
+
+const waitForVideoPlayableState = (videoEl, timeoutMs = 900) => new Promise((resolve) => {
+  if (!videoEl) {
+    resolve(false)
+    return
+  }
+
+  if (videoEl.readyState >= 2) {
+    resolve(true)
+    return
+  }
+
+  const handleReady = () => {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    videoEl.removeEventListener('canplay', handleReady)
+    videoEl.removeEventListener('playing', handleReady)
+    videoEl.removeEventListener('loadeddata', handleReady)
+    resolve(true)
+  }
+
+  const timer = window.setTimeout(() => {
+    videoEl.removeEventListener('canplay', handleReady)
+    videoEl.removeEventListener('playing', handleReady)
+    videoEl.removeEventListener('loadeddata', handleReady)
+    resolve(videoEl.readyState >= 2)
+  }, timeoutMs)
+
+  videoEl.addEventListener('canplay', handleReady, { once: true })
+  videoEl.addEventListener('playing', handleReady, { once: true })
+  videoEl.addEventListener('loadeddata', handleReady, { once: true })
+})
+
+const safeStopStream = (mediaStream) => {
+  if (!mediaStream) return
+  mediaStream.getTracks().forEach((track) => track.stop())
+}
+
+const getPrimaryVideoTrack = (mediaStream) => mediaStream?.getVideoTracks?.()?.[0] || null
+
+const getStreamSnapshot = (mediaStream) => {
+  const track = getPrimaryVideoTrack(mediaStream)
+  const settings = track?.getSettings?.() || {}
+
+  return {
+    track,
+    deviceId: settings.deviceId || '',
+    facingMode: settings.facingMode || ''
+  }
+}
+
+const shouldUpgradeFromPrimer = (mediaStream) => {
+  const { deviceId, facingMode } = getStreamSnapshot(mediaStream)
+
+  if (selectedDevice.value) {
+    return !deviceId || deviceId !== selectedDevice.value
+  }
+
+  if (facingMode) {
+    return facingMode !== 'environment'
+  }
+
+  return true
+}
+
+const attachStreamToVideo = (mediaStream, { awaitReady = false } = {}) => {
+  if (!videoRef.value) return
+
+  isVideoFrameReady.value = false
+  stream = mediaStream
+  videoRef.value.srcObject = mediaStream
+
+  const track = getPrimaryVideoTrack(mediaStream)
+  if (track) {
+    void applyPreferredTrackConstraints(track)
+  }
+
+  if (awaitReady) {
+    return ensureVideoPlayback(videoRef.value)
+  }
+
+  void ensureVideoPlayback(videoRef.value)
+}
+
+const requestBasicCameraPermission = async () => navigator.mediaDevices.getUserMedia({
+  video: {
+    facingMode: { ideal: 'environment' }
+  },
+  audio: false
+})
+
+const requestCameraStreamWithTimeout = async (timeoutMs = 2600) => Promise.race([
+  requestCameraStream(),
+  new Promise((_, reject) => {
+    window.setTimeout(() => {
+      reject(new Error('Camera request timed out'))
+    }, timeoutMs)
+  })
+])
+
+const getCameraConstraintCandidates = () => {
+  const preferred = buildPreferredVideoConstraints(selectedDevice.value, 'environment')
+
+  return [
+    preferred,
+    buildPreferredVideoConstraints('', 'environment'),
+    {
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    },
+    {
+      video: true
+    }
+  ]
+}
+
+const requestCameraStream = async () => {
+  const attempts = getCameraConstraintCandidates()
+  let lastError = null
+
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (error) {
+      lastError = error
+      console.warn('Camera constraint attempt failed:', constraints, error)
+    }
+  }
+
+  throw lastError || new Error('Unable to open camera stream')
+}
+
+const ensureVideoPlayback = async (videoEl) => {
+  if (!videoEl) return
+
+  videoEl.setAttribute('muted', '')
+  videoEl.muted = true
+  videoEl.playsInline = true
+  const metadataPromise = waitForVideoMetadata(videoEl, 1200)
+
+  const tryPlay = async () => {
+    const playPromise = videoEl.play()
+    if (!playPromise || typeof playPromise.then !== 'function') {
+      return true
+    }
+
+    return Promise.race([
+      playPromise.then(() => true),
+      new Promise((resolve) => {
+        window.setTimeout(() => resolve(false), 700)
+      })
+    ])
+  }
+
+  try {
+    const played = await tryPlay()
+    if (!played) {
+      console.warn('Video playback is taking longer than expected; continuing while waiting for the first frame.')
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      await tryPlay()
+    } else {
+      console.warn('Video play() did not complete cleanly; continuing with the attached camera stream.', error)
+    }
+  }
+
+  await metadataPromise
+  await waitForVideoPlayableState(videoEl, 800)
+}
+
+const handleVideoFrameReady = () => {
+  if (!isScanning.value) return
+  isVideoFrameReady.value = true
+}
+
+const autoStartCamera = async () => {
+  if (currentMode.value !== 'camera' || isScanning.value) return
+
+  await nextTick()
+
+  if (!videoRef.value || currentMode.value !== 'camera' || isScanning.value) return
+
+  statusMessage.value = 'Opening camera...'
+  statusType.value = 'info'
+  void startScanning()
+}
+
 // 切换模式
 const switchMode = async (mode) => {
   if (currentMode.value === 'camera') {
@@ -1247,8 +1585,7 @@ const switchMode = async (mode) => {
   currentMode.value = mode
   
   if (mode === 'camera') {
-    await nextTick()
-    await startScanning()
+    await autoStartCamera()
   }
 }
 
@@ -1259,40 +1596,106 @@ const startScanning = async () => {
   try {
     void primeAudioFeedback()
     isScanning.value = true
+    isVideoFrameReady.value = false
+    beginBenchmarkSession('camera')
     statusMessage.value = 'Starting camera...'
     statusType.value = 'info'
-    
-    // 获取视频流
-    const constraints = buildPreferredVideoConstraints(selectedDevice.value, 'environment')
-    
-    stream = await navigator.mediaDevices.getUserMedia(constraints)
-    videoRef.value.srcObject = stream
-    await videoRef.value.play()
+
+    cameraStartupHintTimer = window.setTimeout(() => {
+      if (isScanning.value && !stream) {
+        statusMessage.value = 'Waiting for camera permission. In Safari, tap the address bar menu and choose “开始使用相机”.'
+        statusType.value = 'info'
+      }
+    }, 1800)
+
+    const primerStream = await requestBasicCameraPermission()
+    attachStreamToVideo(primerStream)
+
+    if (cameraStartupHintTimer) {
+      clearTimeout(cameraStartupHintTimer)
+      cameraStartupHintTimer = null
+    }
 
     // 初始化 ZXing
     getCodeReader()
     lastDecodeAttemptAt = 0
     stopScanLoop()
     runEnhancedScanLoop()
-    
-    statusMessage.value = 'Scan started. Please place the barcode inside the frame'
-    statusType.value = 'success'
 
-    window.requestAnimationFrame(() => {
+    statusMessage.value = 'Camera opened. Live preview is starting...'
+    statusType.value = 'info'
+
+    void listDevices()
+
+    if (shouldUpgradeFromPrimer(primerStream)) {
+      void (async () => {
+        try {
+          const upgradedStream = await requestCameraStreamWithTimeout(1600)
+          if (!isScanning.value) {
+            safeStopStream(upgradedStream)
+            return
+          }
+
+          if (upgradedStream !== stream) {
+            const previousStream = stream
+            attachStreamToVideo(upgradedStream)
+            if (previousStream && previousStream !== upgradedStream) {
+              safeStopStream(previousStream)
+            }
+          }
+
+          statusMessage.value = 'Rear camera optimized. Please place the barcode inside the frame'
+          statusType.value = 'success'
+          void checkFlashSupport()
+        } catch (upgradeError) {
+          console.warn('Continuing with the fast compatibility camera stream:', upgradeError)
+          statusMessage.value = 'Scan started. Please place the barcode inside the frame'
+          statusType.value = 'success'
+          void checkFlashSupport()
+        }
+      })()
+    } else {
+      statusMessage.value = 'Scan started. Please place the barcode inside the frame'
+      statusType.value = 'success'
       void checkFlashSupport()
-    })
+    }
+    
+    if (videoRef.value.readyState < 2) {
+      statusMessage.value = 'Camera opened. Waiting for the first live frame...'
+      statusType.value = 'info'
+    }
+
+    void listDevices()
   } catch (error) {
     console.error('スキャン開始に失敗しました:', error)
-    statusMessage.value = 'Failed to start scan: ' + error.message
+    if (cameraStartupHintTimer) {
+      clearTimeout(cameraStartupHintTimer)
+      cameraStartupHintTimer = null
+    }
+    safeStopStream(stream)
+    stream = null
+    if (videoRef.value) {
+      videoRef.value.srcObject = null
+    }
+    const fallbackMessage = error?.name === 'AbortError'
+      ? 'Camera startup was interrupted. Please tap Retry Camera once more.'
+      : (error?.message || 'Unknown camera error')
+    statusMessage.value = 'Failed to start scan: ' + fallbackMessage
     statusType.value = 'error'
     isScanning.value = false
+    finalizeBenchmarkSession({ status: 'startup_failed', labelType: 'CAMERA_INIT' })
   }
 }
 
 // 停止扫描
 const stopScanning = async () => {
   isScanning.value = false
+  isVideoFrameReady.value = false
   stopScanLoop()
+  if (cameraStartupHintTimer) {
+    clearTimeout(cameraStartupHintTimer)
+    cameraStartupHintTimer = null
+  }
   
   if (codeReader) {
     try {
@@ -1304,12 +1707,16 @@ const stopScanning = async () => {
   }
   
   if (stream) {
-    stream.getTracks().forEach(track => track.stop())
+    safeStopStream(stream)
     stream = null
   }
   
   if (videoRef.value) {
     videoRef.value.srcObject = null
+  }
+
+  if (activeBenchmarkSession.value?.status === 'pending') {
+    finalizeBenchmarkSession({ status: 'stopped', labelType: 'UNRESOLVED' })
   }
 }
 
@@ -1486,6 +1893,7 @@ const handleFileUpload = async (event) => {
   if (!file) return
   
   try {
+    beginBenchmarkSession('file')
     void primeAudioFeedback()
     statusMessage.value = 'Analyzing image...'
     statusType.value = 'info'
@@ -1499,6 +1907,7 @@ const handleFileUpload = async (event) => {
     }
   } catch (error) {
     console.error('画像解析に失敗しました:', error)
+    finalizeBenchmarkSession({ status: 'decode_failed', labelType: 'FILE_IMAGE' })
     statusMessage.value = 'Cannot recognize barcode in image'
     statusType.value = 'error'
   }
@@ -1507,6 +1916,7 @@ const handleFileUpload = async (event) => {
 // 处理手动输入
 const handleManualSubmit = () => {
   if (manualCode.value.trim()) {
+    beginBenchmarkSession('manual')
     void primeAudioFeedback()
     void handleScanResult(manualCode.value.trim())
     manualCode.value = ''
@@ -1545,6 +1955,7 @@ const handleScanResult = async (rawData, options = {}) => {
     const result = await response.json()
     
     if (result.success) {
+      ensureBenchmarkSession(options.sourceMode || currentMode.value)
       scanResult.value = {
         raw: normalizedRaw,
         parsed: result.data.data, // Contains specific data points returned from scanController
@@ -1584,15 +1995,31 @@ const handleScanResult = async (rawData, options = {}) => {
         triggerScanFeedback()
       }
 
+      finalizeBenchmarkSession({
+        status: 'success',
+        labelType: resolveScanLabelType(result.data.data, result.data.action),
+        rawData: normalizedRaw
+      })
+
     } else {
       statusMessage.value = result.message || 'Scan failed'
       statusType.value = 'error'
+      finalizeBenchmarkSession({
+        status: 'backend_failed',
+        labelType: 'UNRESOLVED',
+        rawData: normalizedRaw
+      })
     }
     
   } catch (error) {
     console.error('スキャン結果の処理に失敗しました:', error)
     statusMessage.value = 'Failed to process scan result'
     statusType.value = 'error'
+    finalizeBenchmarkSession({
+      status: 'request_failed',
+      labelType: 'UNRESOLVED',
+      rawData: normalizedRaw
+    })
   } finally {
     isHandlingScan.value = false
   }
@@ -1857,6 +2284,7 @@ const handleOutbound = () => {
   }
 
   outboundStrategy.value = strategy || 'DIRECT'
+  outboundSelectionMode.value = strategy === 'FIFO' && candidates.length > 1 ? 'AUTO' : 'MANUAL'
   outboundCandidates.value = candidates
   selectedOutboundLotKey.value = candidates[0]?.key || ''
   outboundForm.value = {
@@ -1881,7 +2309,7 @@ const submitOutbound = async () => {
     return
   }
 
-  if (!isOutboundFifoMode.value && !outboundForm.value.lot_number) {
+  if (!isOutboundAutoMode.value && !outboundForm.value.lot_number) {
     statusMessage.value = 'Please choose a specific lot and source bin first.'
     statusType.value = 'error'
     return
@@ -1906,7 +2334,7 @@ const submitOutbound = async () => {
         'Authorization': `Bearer ${localStorage.getItem('token')}`
       },
       body: JSON.stringify(
-        isOutboundFifoMode.value
+        isOutboundAutoMode.value
           ? {
               sku: outboundForm.value.sku,
               qty,
@@ -1936,7 +2364,7 @@ const submitOutbound = async () => {
     statusType.value = 'success'
     showActionFeedbackModal(
       'Outbound Complete',
-      isOutboundFifoMode.value
+      isOutboundAutoMode.value
         ? `${outboundForm.value.item_name} -${qty} was deducted by FIFO. ${fifoSummary}`
         : `${outboundForm.value.item_name} -${qty} was deducted from ${directSourceBinCode}.`
     )
@@ -1960,6 +2388,7 @@ const clearResult = () => {
   outboundCandidates.value = []
   selectedOutboundLotKey.value = ''
   outboundStrategy.value = 'DIRECT'
+  outboundSelectionMode.value = 'AUTO'
   actionFeedbackModal.value.visible = false
   if (operationNoticeTimer) {
     clearTimeout(operationNoticeTimer)
@@ -2054,6 +2483,7 @@ const playActionSuccessSound = () => {
   position: relative;
   overflow: hidden;
   background: #000000;
+  min-height: 400px;
 }
 
 .camera-video {
@@ -2061,10 +2491,48 @@ const playActionSuccessSound = () => {
   height: 400px;
   object-fit: cover;
   background: #000000;
+  opacity: 1;
+  transition: opacity 0.18s ease;
 }
 
 .camera-video.scanning {
   border: 3px solid #10b981;
+}
+
+.camera-video.pending {
+  opacity: 0;
+}
+
+.camera-video.ready {
+  opacity: 1;
+}
+
+.camera-stage-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, rgba(17, 24, 39, 0.8), rgba(0, 0, 0, 0.98));
+  z-index: 1;
+}
+
+.camera-stage-placeholder-copy {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.camera-stage-placeholder-copy strong {
+  display: block;
+  font-size: 1.05rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.camera-stage-placeholder-copy p {
+  margin: 8px 0 0;
+  font-size: 0.92rem;
+  color: rgba(255, 255, 255, 0.68);
 }
 
 .scan-overlay {
@@ -2078,6 +2546,7 @@ const playActionSuccessSound = () => {
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  z-index: 2;
 }
 
 .scan-frame {
@@ -2898,6 +3367,32 @@ const playActionSuccessSound = () => {
   gap: 10px;
 }
 
+.outbound-mode-toggle {
+  display: inline-flex;
+  width: 100%;
+  padding: 4px;
+  gap: 4px;
+  border-radius: 12px;
+  background: #e2e8f0;
+}
+
+.outbound-mode-btn {
+  flex: 1;
+  min-height: 42px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #475569;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.outbound-mode-btn.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
 .outbound-plan-card {
   border: 1px solid #dbe3f0;
   border-radius: 14px;
@@ -2961,7 +3456,171 @@ const playActionSuccessSound = () => {
   cursor: not-allowed;
 }
 
+.benchmark-panel {
+  margin: 18px 0 22px;
+  border: 1px solid #dbe3f0;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.benchmark-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  background: transparent;
+  border: none;
+  color: #0f172a;
+  font-size: 0.98rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.benchmark-body {
+  padding: 0 18px 18px;
+}
+
+.benchmark-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.benchmark-card {
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.benchmark-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.benchmark-card strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.15rem;
+  color: #0f172a;
+}
+
+.benchmark-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.benchmark-action {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.benchmark-action.danger {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.benchmark-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.benchmark-recent {
+  margin-top: 16px;
+}
+
+.benchmark-recent h4 {
+  margin: 0 0 10px;
+  color: #0f172a;
+}
+
+.benchmark-list {
+  display: grid;
+  gap: 10px;
+}
+
+.benchmark-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+
+.benchmark-row p {
+  margin: 4px 0 0;
+  font-size: 0.84rem;
+  color: #64748b;
+}
+
+.benchmark-row-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  font-size: 0.84rem;
+  color: #334155;
+}
+
+.benchmark-status {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.benchmark-status.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.benchmark-status.stopped,
+.benchmark-status.backend_failed,
+.benchmark-status.request_failed,
+.benchmark-status.decode_failed,
+.benchmark-status.startup_failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.benchmark-empty {
+  margin: 0;
+  color: #64748b;
+}
+
 @media (max-width: 768px) {
+  .benchmark-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .benchmark-row {
+    flex-direction: column;
+  }
+
+  .benchmark-row-meta {
+    align-items: flex-start;
+  }
+
   .modal-overlay {
     align-items: flex-start;
     padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
