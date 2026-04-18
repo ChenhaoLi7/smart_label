@@ -18,7 +18,7 @@
     <!-- 扫码区域 -->
     <div class="scanner-area">
       <!-- 摄像头预览 -->
-      <div v-if="currentMode === 'camera'" class="camera-container">
+      <div v-if="currentMode === 'camera'" :class="['camera-container', { 'camera-container-suspended': shouldSuspendLiveScanner }]">
         <div class="camera-stage">
           <video 
             ref="videoRef" 
@@ -100,6 +100,10 @@
     <!-- 扫描结果 -->
     <div v-if="scanResult" class="scan-result">
       <h3>Scan Result</h3>
+      <div class="result-meta-pills">
+        <span class="result-pill result-pill-live">Scanner Paused</span>
+        <span v-if="scanAction" class="result-pill">{{ scanAction.replaceAll('_', ' ') }}</span>
+      </div>
       <div class="result-content">
         <div class="result-item">
           <span class="label">Raw Data:</span>
@@ -112,14 +116,14 @@
       </div>
 
       <!-- 业务操作按钮 -->
-      <div class="business-actions">
+      <div class="business-actions business-actions-primary">
         <!-- 自动识别未入库商品时显示快速建档按钮 -->
-        <button v-if="isAdmin && scanAction === 'CREATE_ITEM'" @click="showCreateItemModal = true" class="action-btn" style="background: #10b981; color: white; border-color: #10b981;">
+        <button v-if="isAdmin && scanAction === 'CREATE_ITEM'" @click="showCreateItemModal = true" class="action-btn action-btn-create">
           <span class="icon">➕</span>
           Fast Item Creation
         </button>
 
-        <button v-if="isAdmin" @click="handleInbound" class="action-btn inbound">
+        <button v-if="isAdmin" @click="handleInbound" class="action-btn action-btn-primary inbound">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="7 10 12 15 17 10"/>
@@ -127,7 +131,7 @@
           </svg>
           Inbound Processing
         </button>
-        <button v-if="isAdmin" @click="handleMove" class="action-btn" style="background: #0f172a; color: white;">
+        <button v-if="isAdmin" @click="handleMove" class="action-btn action-btn-dark">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M16 3h5v5"/>
             <path d="M4 20L21 3"/>
@@ -137,7 +141,7 @@
           </svg>
           Move Bin
         </button>
-        <button @click="handleOutbound" class="action-btn outbound">
+        <button @click="handleOutbound" class="action-btn action-btn-primary outbound">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="17 8 12 3 7 8"/>
@@ -145,7 +149,9 @@
           </svg>
           Outbound Processing
         </button>
-        <button @click="clearResult" class="action-btn clear">
+      </div>
+      <div class="business-actions business-actions-secondary">
+        <button @click="clearResult" class="action-btn action-btn-secondary clear">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -392,7 +398,7 @@
                 type="button"
                 class="outbound-mode-btn"
                 :class="{ active: outboundSelectionMode === 'AUTO' }"
-                @click="outboundSelectionMode = 'AUTO'; syncOutboundCandidate()"
+                @click="setOutboundSelectionMode('AUTO')"
               >
                 FIFO Auto
               </button>
@@ -400,23 +406,23 @@
                 type="button"
                 class="outbound-mode-btn"
                 :class="{ active: outboundSelectionMode === 'MANUAL' }"
-                @click="outboundSelectionMode = 'MANUAL'; syncOutboundCandidate()"
+                @click="setOutboundSelectionMode('MANUAL')"
               >
                 Choose Lot
               </button>
             </div>
             <p class="form-hint">FIFO is still the default, but you can switch to a specific lot whenever you need exact batch control.</p>
           </div>
-          <div v-if="isOutboundAutoMode" class="form-group">
+          <div v-show="isOutboundAutoMode" class="form-group">
             <label>Deduction Strategy</label>
             <input type="text" value="FIFO · oldest lot first" disabled class="input-field disabled-input">
             <p class="form-hint">Scanning an item label will now deduct from the oldest active lot first, then continue forward only if more stock is needed.</p>
           </div>
-          <div v-if="isOutboundAutoMode" class="form-group">
+          <div v-show="isOutboundAutoMode" class="form-group">
             <label>FIFO Plan</label>
             <div class="outbound-plan-list">
               <div
-                v-for="(candidate, index) in outboundCandidates"
+                v-for="(candidate, index) in outboundPlanPreview"
                 :key="candidate.key"
                 class="outbound-plan-card"
               >
@@ -429,8 +435,11 @@
                 </div>
               </div>
             </div>
+            <p v-if="remainingOutboundPlanCount > 0" class="form-hint">
+              +{{ remainingOutboundPlanCount }} more FIFO steps are available if additional stock is needed.
+            </p>
           </div>
-          <div v-else-if="outboundCandidates.length > 1" class="form-group">
+          <div v-show="!isOutboundAutoMode && outboundCandidates.length > 1" class="form-group">
             <label>Source Lot / Bin ✳️</label>
             <select v-model="selectedOutboundLotKey" @change="syncOutboundCandidate" class="input-field">
               <option
@@ -591,6 +600,44 @@ const outboundForm = ref({
   uom: 'pcs'
 })
 
+const hasInteractiveModalOpen = computed(() => (
+  showCreateItemModal.value ||
+  showInboundModal.value ||
+  showMoveModal.value ||
+  showOutboundModal.value ||
+  actionFeedbackModal.value.visible
+))
+
+const hasResultWorkspaceOpen = computed(() => Boolean(scanResult.value) && !hasInteractiveModalOpen.value)
+
+const shouldSuspendLiveScanner = computed(() => (
+  hasInteractiveModalOpen.value || hasResultWorkspaceOpen.value
+))
+
+const pauseOutboundLiveDecoding = () => {
+  stopScanLoop()
+  if (videoRef.value && !videoRef.value.paused) {
+    videoRef.value.pause()
+  }
+}
+
+const resumeOutboundLiveDecoding = () => {
+  if (!isScanning.value || !videoRef.value || isHandlingScan.value) return
+
+  if (videoRef.value.paused) {
+    const playPromise = videoRef.value.play()
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch((error) => {
+        console.warn('Unable to resume live preview cleanly after closing a workflow modal.', error)
+      })
+    }
+  }
+  if (scanLoopFrame) return
+
+  lastDecodeAttemptAt = 0
+  runEnhancedScanLoop()
+}
+
 // 🔑 幂等性与离线队列
 // 1. 从 LocalStorage 初始化队列 (Persistence)
 const savedQueue = localStorage.getItem('offlineQueue')
@@ -602,6 +649,25 @@ const isProcessingQueue = ref(false)
 watch(requestQueue, (newQueue) => {
   localStorage.setItem('offlineQueue', JSON.stringify(newQueue))
 }, { deep: true })
+
+watch(
+  [
+    () => Boolean(scanResult.value),
+    showCreateItemModal,
+    showInboundModal,
+    showMoveModal,
+    showOutboundModal,
+    () => actionFeedbackModal.value.visible
+  ],
+  () => {
+    if (shouldSuspendLiveScanner.value) {
+      pauseOutboundLiveDecoding()
+      return
+    }
+
+    resumeOutboundLiveDecoding()
+  }
+)
 
 // 队列处理逻辑 (Background Worker)
 const processQueue = async () => {
@@ -801,6 +867,8 @@ const isOutboundAutoMode = computed(() => isOutboundFifoMode.value && outboundSe
 const totalOutboundAvailableQty = computed(() => (
   outboundCandidates.value.reduce((sum, candidate) => sum + Number(candidate.available_qty || 0), 0)
 ))
+const outboundPlanPreview = computed(() => outboundCandidates.value.slice(0, 4))
+const remainingOutboundPlanCount = computed(() => Math.max(outboundCandidates.value.length - outboundPlanPreview.value.length, 0))
 const outboundWorkflowGuide = computed(() => {
   const parsed = scanResult.value?.parsed
   if (!parsed) return []
@@ -1076,6 +1144,12 @@ const syncOutboundCandidate = () => {
   }
 }
 
+const setOutboundSelectionMode = (mode) => {
+  if (outboundSelectionMode.value === mode) return
+  outboundSelectionMode.value = mode
+  syncOutboundCandidate()
+}
+
 const resolveOutboundCandidates = () => {
   const parsed = scanResult.value?.parsed
 
@@ -1214,15 +1288,61 @@ const decodeCurrentVideoFrame = (video) => {
   const videoHeight = video.videoHeight || 0
   if (!videoWidth || !videoHeight) return ''
 
-  const metrics = computeFrameMetrics(video, scanCanvasCache)
-  const includeFullFrame = metrics.lowLight || metrics.blurry
-  const candidates = buildDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
-    includeFullFrame,
-    enableTiltAssist: true
+  const metrics = getAdaptiveFrameMetrics(video)
+  const reader = getCodeReader()
+
+  const fastCandidates = buildDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+    includeEnhancedAssist: false,
+    includeBinaryAssist: false,
+    includeFullFrame: false,
+    enableTiltAssist: false
   })
 
-  const decoded = decodeFromCandidates(getCodeReader(), candidates)
-  return decoded?.text ? String(decoded.text).trim() : ''
+  let decoded = decodeFromCandidates(reader, fastCandidates)
+
+  if (!decoded?.text) {
+    const shouldUseMediumAssist =
+      decodeMissStreak >= 1 ||
+      metrics.lowLight ||
+      metrics.blurry
+
+    if (shouldUseMediumAssist) {
+      const mediumCandidates = buildDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+        includeEnhancedAssist: true,
+        includeBinaryAssist: decodeMissStreak >= 2 || metrics.lowLight,
+        includeFullFrame: false,
+        enableTiltAssist: decodeMissStreak >= 3 || metrics.blurry
+      })
+
+      decoded = decodeFromCandidates(reader, mediumCandidates)
+    }
+  }
+
+  if (!decoded?.text) {
+    const shouldUseHeavyAssist =
+      decodeMissStreak >= 4 ||
+      metrics.lowLight ||
+      metrics.blurry
+
+    if (shouldUseHeavyAssist) {
+      const heavyCandidates = buildDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+        includeEnhancedAssist: true,
+        includeBinaryAssist: true,
+        includeFullFrame: decodeMissStreak >= 6 || metrics.lowLight,
+        enableTiltAssist: true
+      })
+
+      decoded = decodeFromCandidates(reader, heavyCandidates)
+    }
+  }
+
+  if (!decoded?.text) {
+    decodeMissStreak += 1
+    return ''
+  }
+
+  decodeMissStreak = 0
+  return String(decoded.text).trim()
 }
 
 const stopScanLoop = () => {
@@ -1241,13 +1361,14 @@ const runEnhancedScanLoop = () => {
   if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
 
   const now = performance.now()
-  if (now - lastDecodeAttemptAt < 90) return
+  if (now - lastDecodeAttemptAt < 75) return
   lastDecodeAttemptAt = now
   if (isHandlingScan.value) return
 
   ensureBenchmarkSession('camera')
   activeBenchmarkSession.value.decodeAttempts += 1
-  captureBenchmarkFrame(computeFrameMetrics(video, scanCanvasCache))
+  const frameMetrics = getAdaptiveFrameMetrics(video)
+  captureBenchmarkFrame(frameMetrics)
 
   const decodedText = decodeCurrentVideoFrame(video)
   if (!decodedText) return
@@ -1260,7 +1381,37 @@ let codeReader = null
 let stream = null
 let scanLoopFrame = null
 let lastDecodeAttemptAt = 0
+let decodeMissStreak = 0
+let lastFrameMetricsAt = 0
+let cachedFrameMetrics = null
 let cameraStartupHintTimer = null
+let videoReadyTimer = null
+let deferredTrackConstraintsTimer = null
+
+const clearVideoReadyTimer = () => {
+  if (videoReadyTimer) {
+    clearTimeout(videoReadyTimer)
+    videoReadyTimer = null
+  }
+}
+
+const clearDeferredTrackConstraintsTimer = () => {
+  if (deferredTrackConstraintsTimer) {
+    clearTimeout(deferredTrackConstraintsTimer)
+    deferredTrackConstraintsTimer = null
+  }
+}
+
+const getAdaptiveFrameMetrics = (video) => {
+  const now = performance.now()
+
+  if (!cachedFrameMetrics || now - lastFrameMetricsAt > 220) {
+    cachedFrameMetrics = computeFrameMetrics(video, scanCanvasCache)
+    lastFrameMetricsAt = now
+  }
+
+  return cachedFrameMetrics
+}
 
 // 生命周期
 onMounted(async () => {
@@ -1271,14 +1422,14 @@ onMounted(async () => {
     return
   }
 
-  await checkPermissions()
-  await listDevices()
+  void checkPermissions()
   if (isAdmin) {
     void ensureBinsLoaded()
   }
   if (currentMode.value === 'camera') {
     await autoStartCamera()
   }
+  void listDevices()
 })
 
 onBeforeUnmount(() => {
@@ -1453,13 +1604,19 @@ const shouldUpgradeFromPrimer = (mediaStream) => {
 const attachStreamToVideo = (mediaStream, { awaitReady = false } = {}) => {
   if (!videoRef.value) return
 
+  clearVideoReadyTimer()
+  clearDeferredTrackConstraintsTimer()
   isVideoFrameReady.value = false
   stream = mediaStream
   videoRef.value.srcObject = mediaStream
 
   const track = getPrimaryVideoTrack(mediaStream)
   if (track) {
-    void applyPreferredTrackConstraints(track)
+    deferredTrackConstraintsTimer = window.setTimeout(() => {
+      deferredTrackConstraintsTimer = null
+      if (stream !== mediaStream || !isScanning.value) return
+      void applyPreferredTrackConstraints(track)
+    }, 260)
   }
 
   if (awaitReady) {
@@ -1561,8 +1718,16 @@ const ensureVideoPlayback = async (videoEl) => {
 }
 
 const handleVideoFrameReady = () => {
-  if (!isScanning.value) return
-  isVideoFrameReady.value = true
+  if (!isScanning.value || !videoRef.value) return
+  if (!videoRef.value.videoWidth || !videoRef.value.videoHeight) return
+  if (isVideoFrameReady.value || videoReadyTimer) return
+
+  videoReadyTimer = window.setTimeout(() => {
+    videoReadyTimer = null
+    if (!isScanning.value || !videoRef.value) return
+    if (!videoRef.value.videoWidth || !videoRef.value.videoHeight) return
+    isVideoFrameReady.value = true
+  }, 36)
 }
 
 const autoStartCamera = async () => {
@@ -1597,6 +1762,9 @@ const startScanning = async () => {
     void primeAudioFeedback()
     isScanning.value = true
     isVideoFrameReady.value = false
+    decodeMissStreak = 0
+    cachedFrameMetrics = null
+    lastFrameMetricsAt = 0
     beginBenchmarkSession('camera')
     statusMessage.value = 'Starting camera...'
     statusType.value = 'info'
@@ -1624,8 +1792,6 @@ const startScanning = async () => {
 
     statusMessage.value = 'Camera opened. Live preview is starting...'
     statusType.value = 'info'
-
-    void listDevices()
 
     if (shouldUpgradeFromPrimer(primerStream)) {
       void (async () => {
@@ -1691,6 +1857,11 @@ const startScanning = async () => {
 const stopScanning = async () => {
   isScanning.value = false
   isVideoFrameReady.value = false
+  decodeMissStreak = 0
+  cachedFrameMetrics = null
+  lastFrameMetricsAt = 0
+  clearVideoReadyTimer()
+  clearDeferredTrackConstraintsTimer()
   stopScanLoop()
   if (cameraStartupHintTimer) {
     clearTimeout(cameraStartupHintTimer)
@@ -1952,7 +2123,23 @@ const handleScanResult = async (rawData, options = {}) => {
       body: JSON.stringify({ raw: normalizedRaw, device: 'web-scanner' })
     })
 
-    const result = await response.json()
+    const responseText = await response.text()
+    let result = null
+
+    try {
+      result = responseText ? JSON.parse(responseText) : null
+    } catch (parseError) {
+      throw new Error(`Scanner API returned a non-JSON response (${response.status}).`)
+    }
+
+    if (!response.ok) {
+      const backendMessage = result?.message || result?.error || `HTTP ${response.status}`
+      throw new Error(backendMessage)
+    }
+
+    if (!result || typeof result !== 'object') {
+      throw new Error('Scanner API returned an empty response.')
+    }
     
     if (result.success) {
       ensureBenchmarkSession(options.sourceMode || currentMode.value)
@@ -2012,8 +2199,12 @@ const handleScanResult = async (rawData, options = {}) => {
     }
     
   } catch (error) {
-    console.error('スキャン結果の処理に失敗しました:', error)
-    statusMessage.value = 'Failed to process scan result'
+    console.error('スキャン結果の処理に失敗しました:', {
+      raw: normalizedRaw,
+      message: error?.message,
+      stack: error?.stack
+    })
+    statusMessage.value = `Scan failed: ${error?.message || 'Unknown processing error'}`
     statusType.value = 'error'
     finalizeBenchmarkSession({
       status: 'request_failed',
@@ -2297,6 +2488,7 @@ const handleOutbound = () => {
     uom: 'pcs'
   }
   syncOutboundCandidate()
+  pauseOutboundLiveDecoding()
   showOutboundModal.value = true
 }
 
@@ -2483,13 +2675,17 @@ const playActionSuccessSound = () => {
   position: relative;
   overflow: hidden;
   background: #000000;
-  min-height: 400px;
+  height: 400px;
 }
 
 .camera-video {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 400px;
+  height: 100%;
+  display: block;
   object-fit: cover;
+  object-position: center center;
   background: #000000;
   opacity: 1;
   transition: opacity 0.18s ease;
@@ -2986,33 +3182,106 @@ const playActionSuccessSound = () => {
 
 .business-actions {
   display: flex;
-  gap: 15px;
+  gap: 12px;
   flex-wrap: wrap;
+}
+
+.business-actions-primary {
+  margin-top: 14px;
+}
+
+.business-actions-secondary {
+  margin-top: 10px;
+}
+
+.result-meta-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.result-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #334155;
+  background: rgba(226, 232, 240, 0.9);
+}
+
+.result-pill-live {
+  background: rgba(219, 234, 254, 0.92);
+  color: #1d4ed8;
 }
 
 .action-btn {
   padding: 12px 24px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid rgba(203, 213, 225, 0.95);
   border-radius: 12px;
   cursor: pointer;
-  font-weight: 500;
-  transition: all 0.2s;
-  background: var(--glass-bg);
-  color: var(--text-primary);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  font-weight: 600;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  background: #ffffff;
+  color: #0f172a;
   flex: 1;
   min-width: 140px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .action-btn:hover {
-  transform: translateY(-2px);
-  background: var(--glass-border);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.action-btn-primary {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+
+.action-btn-primary:hover,
+.action-btn-primary:active {
+  background: #111827;
+  border-color: #111827;
+}
+
+.action-btn-dark {
+  background: #1e293b;
+  color: #ffffff;
+  border-color: #1e293b;
+}
+
+.action-btn-dark:hover,
+.action-btn-dark:active {
+  background: #0f172a;
+  border-color: #0f172a;
+}
+
+.action-btn-create {
+  background: #10b981;
+  color: #ffffff;
+  border-color: #10b981;
+}
+
+.action-btn-create:hover,
+.action-btn-create:active {
+  background: #059669;
+  border-color: #059669;
+}
+
+.action-btn-secondary {
+  background: #f8fafc;
+  color: #334155;
+  border-color: #cbd5e1;
 }
 
 .operation-toast {
@@ -3160,7 +3429,7 @@ const playActionSuccessSound = () => {
     padding: 15px;
   }
   
-  .camera-video {
+  .camera-stage {
     height: 300px;
   }
 }
@@ -3174,7 +3443,7 @@ const playActionSuccessSound = () => {
     margin-bottom: 18px;
   }
   
-  .camera-video {
+  .camera-stage {
     height: 300px;
   }
   
@@ -3198,6 +3467,10 @@ const playActionSuccessSound = () => {
   
   .business-actions {
     flex-direction: column;
+  }
+
+  .result-meta-pills {
+    justify-content: center;
   }
 
   .camera-controls {
@@ -3385,6 +3658,7 @@ const playActionSuccessSound = () => {
   color: #475569;
   font-weight: 700;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .outbound-mode-btn.active {
@@ -3437,6 +3711,20 @@ const playActionSuccessSound = () => {
   border-radius: 8px;
   font-weight: 500;
   cursor: pointer;
+  touch-action: manipulation;
+}
+
+.control-btn,
+.action-btn,
+.close-btn {
+  touch-action: manipulation;
+}
+
+.camera-container-suspended .camera-video,
+.camera-container-suspended .camera-stage-placeholder,
+.camera-container-suspended .scan-overlay,
+.camera-container-suspended .camera-controls {
+  visibility: hidden;
 }
 
 .btn-cancel {
@@ -3624,6 +3912,8 @@ const playActionSuccessSound = () => {
   .modal-overlay {
     align-items: flex-start;
     padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .modal-content {

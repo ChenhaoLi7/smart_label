@@ -318,6 +318,8 @@ export const buildDecodeCandidatesFromVideo = (video, cache, metrics, options = 
   const squareRoi = buildSquareRoi(video)
   const includeFullFrame = options.includeFullFrame === true
   const enableTiltAssist = options.enableTiltAssist !== false
+  const includeEnhancedAssist = options.includeEnhancedAssist !== false
+  const includeBinaryAssist = options.includeBinaryAssist !== false
   const targetWidth = clamp(Math.round(roi.width), 480, 960)
   const targetHeight = clamp(Math.round(roi.height), 220, 540)
 
@@ -336,13 +338,17 @@ export const buildDecodeCandidatesFromVideo = (video, cache, metrics, options = 
     })
   }
 
-  const enhancedCanvas = ensureCanvas(cache, 'enhancedCanvas', targetWidth, targetHeight)
-  enhanceLowLight(roiCanvas, enhancedCanvas, metrics)
-  candidates.push({ label: 'roi-enhanced', canvas: enhancedCanvas })
+  if (includeEnhancedAssist) {
+    const enhancedCanvas = ensureCanvas(cache, 'enhancedCanvas', targetWidth, targetHeight)
+    enhanceLowLight(roiCanvas, enhancedCanvas, metrics)
+    candidates.push({ label: 'roi-enhanced', canvas: enhancedCanvas })
+  }
 
-  const binaryCanvas = ensureCanvas(cache, 'binaryCanvas', targetWidth, targetHeight)
-  applyBlockThreshold(roiCanvas, binaryCanvas, metrics)
-  candidates.push({ label: 'roi-binary', canvas: binaryCanvas })
+  if (includeBinaryAssist) {
+    const binaryCanvas = ensureCanvas(cache, 'binaryCanvas', targetWidth, targetHeight)
+    applyBlockThreshold(roiCanvas, binaryCanvas, metrics)
+    candidates.push({ label: 'roi-binary', canvas: binaryCanvas })
+  }
 
   const squareSize = clamp(Math.round(squareRoi.width), 360, 720)
   const squareCanvas = ensureCanvas(cache, 'squareCanvas', squareSize, squareSize)
