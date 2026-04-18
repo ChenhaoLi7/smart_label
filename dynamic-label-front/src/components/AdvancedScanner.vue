@@ -151,6 +151,12 @@
         </button>
       </div>
       <div class="business-actions business-actions-secondary">
+        <button @click="handleScanNext" class="action-btn action-btn-secondary resume">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Scan Next
+        </button>
         <button @click="clearResult" class="action-btn action-btn-secondary clear">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>
@@ -494,6 +500,7 @@ import {
 // import QRCode from 'qrcode' // 暂时注释，后续会用到
 
 const router = useRouter()
+const PREFERRED_CAMERA_DEVICE_KEY = 'preferredCameraDeviceId'
 
 const isHandheldClient = () => {
   const ua = window.navigator.userAgent || window.navigator.vendor || ''
@@ -515,7 +522,7 @@ const statusType = ref('info')
 const isVideoFrameReady = ref(false)
 const manualCode = ref('')
 const devices = ref([])
-const selectedDevice = ref('')
+const selectedDevice = ref(localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || '')
 const hasFlash = ref(false)
 const flashOn = ref(false)
 const scanCanvasCache = {}
@@ -1493,7 +1500,14 @@ const listDevices = async () => {
         device.label.includes('後')
       )
       
-      selectedDevice.value = rearCamera ? rearCamera.deviceId : devices.value[0].deviceId
+      const storedDeviceId = localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || ''
+      const hasStoredDevice = storedDeviceId && devices.value.some((device) => device.deviceId === storedDeviceId)
+      selectedDevice.value = hasStoredDevice
+        ? storedDeviceId
+        : (rearCamera ? rearCamera.deviceId : devices.value[0].deviceId)
+      if (selectedDevice.value) {
+        localStorage.setItem(PREFERRED_CAMERA_DEVICE_KEY, selectedDevice.value)
+      }
       
       console.log('📷 可用摄像头:', devices.value.map(d => ({
         deviceId: d.deviceId,
@@ -1612,6 +1626,11 @@ const attachStreamToVideo = (mediaStream, { awaitReady = false } = {}) => {
 
   const track = getPrimaryVideoTrack(mediaStream)
   if (track) {
+    const settings = track.getSettings?.() || {}
+    if (settings.deviceId) {
+      selectedDevice.value = settings.deviceId
+      localStorage.setItem(PREFERRED_CAMERA_DEVICE_KEY, settings.deviceId)
+    }
     deferredTrackConstraintsTimer = window.setTimeout(() => {
       deferredTrackConstraintsTimer = null
       if (stream !== mediaStream || !isScanning.value) return
@@ -1626,12 +1645,33 @@ const attachStreamToVideo = (mediaStream, { awaitReady = false } = {}) => {
   void ensureVideoPlayback(videoRef.value)
 }
 
-const requestBasicCameraPermission = async () => navigator.mediaDevices.getUserMedia({
-  video: {
-    facingMode: { ideal: 'environment' }
-  },
-  audio: false
-})
+const requestBasicCameraPermission = async () => {
+  const preferredDeviceId = selectedDevice.value || localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || ''
+
+  if (preferredDeviceId) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: preferredDeviceId },
+          width: { ideal: 960 },
+          height: { ideal: 540 }
+        },
+        audio: false
+      })
+    } catch (error) {
+      console.warn('Preferred camera could not be reopened directly, falling back to environment camera.', error)
+    }
+  }
+
+  return navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 960 },
+      height: { ideal: 540 }
+    },
+    audio: false
+  })
+}
 
 const requestCameraStreamWithTimeout = async (timeoutMs = 2600) => Promise.race([
   requestCameraStream(),
@@ -1893,6 +1933,9 @@ const stopScanning = async () => {
 
 // 切换摄像头
 const switchDevice = async () => {
+  if (selectedDevice.value) {
+    localStorage.setItem(PREFERRED_CAMERA_DEVICE_KEY, selectedDevice.value)
+  }
   if (isScanning.value) {
     await stopScanning()
     // 等待一下确保资源释放
@@ -2589,6 +2632,24 @@ const clearResult = () => {
   statusMessage.value = ''
 }
 
+const handleScanNext = async () => {
+  clearResult()
+
+  if (currentMode.value !== 'camera') return
+
+  statusMessage.value = 'Camera ready. Scan the next label.'
+  statusType.value = 'success'
+
+  await nextTick()
+
+  if (isScanning.value) {
+    resumeOutboundLiveDecoding()
+    return
+  }
+
+  await startScanning()
+}
+
 // 播放扫描音效
 const playScanSound = () => {
   void playTonePattern(
@@ -2812,6 +2873,7 @@ const playActionSuccessSound = () => {
   cursor: pointer;
   font-weight: 600;
   transition: all 0.2s;
+  touch-action: manipulation;
 }
 
 .control-btn:hover {
@@ -3235,6 +3297,7 @@ const playActionSuccessSound = () => {
   justify-content: center;
   gap: 8px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  touch-action: manipulation;
 }
 
 .action-btn:hover {
@@ -3282,6 +3345,18 @@ const playActionSuccessSound = () => {
   background: #f8fafc;
   color: #334155;
   border-color: #cbd5e1;
+}
+
+.action-btn-secondary.resume {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.action-btn-secondary.resume:hover,
+.action-btn-secondary.resume:active {
+  background: #dbeafe;
+  border-color: #93c5fd;
 }
 
 .operation-toast {
