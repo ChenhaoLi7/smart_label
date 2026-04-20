@@ -168,10 +168,15 @@
     </div>
 
     <div v-if="actionFeedbackModal.visible" class="modal-overlay modal-overlay-foreground" @click="closeActionFeedbackModal">
-      <div class="modal-content action-feedback-modal" @click.stop>
-        <div class="action-feedback-icon">✓</div>
-        <h3>{{ actionFeedbackModal.title }}</h3>
-        <p>{{ actionFeedbackModal.message }}</p>
+      <div class="modal-content glass-panel action-feedback-modal" @click.stop>
+        <div class="action-feedback-orb">
+          <span>✓</span>
+        </div>
+        <div class="action-feedback-copy-block">
+          <span class="action-feedback-eyebrow">Warehouse Updated</span>
+          <h3>{{ actionFeedbackModal.title }}</h3>
+          <p>{{ actionFeedbackModal.message }}</p>
+        </div>
         <button @click="closeActionFeedbackModal" class="btn-primary action-feedback-btn">Done</button>
       </div>
     </div>
@@ -375,25 +380,37 @@
 
     <!-- 出库弹窗 -->
     <div v-if="showOutboundModal" class="modal-overlay" @click="showOutboundModal = false">
-      <div class="modal-content glass-panel" @click.stop>
-        <div class="modal-header">
-          <h3>📤 Outbound Processing</h3>
+      <div class="modal-content glass-panel outbound-modal" @click.stop>
+        <div class="modal-header modal-header-glass">
+          <div class="modal-header-copy">
+            <span class="modal-eyebrow">Inventory Action</span>
+            <h3>Outbound Processing</h3>
+          </div>
           <button @click="showOutboundModal = false" class="close-btn">&times;</button>
         </div>
         <div class="modal-body form-body">
-          <div class="form-group">
-            <label>SKU</label>
-            <input type="text" v-model="outboundForm.sku" disabled class="input-field disabled-input">
-          </div>
-          <div class="form-group">
-            <label>Item Name</label>
-            <input type="text" v-model="outboundForm.item_name" disabled class="input-field disabled-input">
+          <div class="outbound-summary-card">
+            <div class="outbound-summary-topline">
+              <span class="outbound-summary-eyebrow">Selected item</span>
+              <span class="outbound-summary-badge">{{ isOutboundAutoMode ? 'FIFO Flow' : 'Specific Lot' }}</span>
+            </div>
+            <div class="outbound-summary-grid">
+              <div class="outbound-summary-field">
+                <span>SKU</span>
+                <strong>{{ outboundForm.sku || '—' }}</strong>
+              </div>
+              <div class="outbound-summary-field outbound-summary-field-wide">
+                <span>Item Name</span>
+                <strong>{{ outboundForm.item_name || '—' }}</strong>
+              </div>
+            </div>
           </div>
           <div v-if="outboundWorkflowGuide.length" class="form-group">
             <label>Workflow Guide</label>
-            <div class="workflow-guide-compact">
-              <div v-for="tip in outboundWorkflowGuide" :key="`modal-${tip}`" class="workflow-guide-compact-item">
-                {{ tip }}
+            <div class="workflow-guide-compact outbound-workflow-guide">
+              <div v-for="(tip, index) in outboundWorkflowGuide" :key="`modal-${tip}`" class="workflow-guide-compact-item workflow-guide-glass-item">
+                <span class="workflow-guide-index">{{ index + 1 }}</span>
+                <span>{{ tip }}</span>
               </div>
             </div>
           </div>
@@ -526,6 +543,8 @@ const selectedDevice = ref(localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || 
 const hasFlash = ref(false)
 const flashOn = ref(false)
 const scanCanvasCache = {}
+const WORKER_CAPTURE_MAX_WIDTH = 1280
+const WORKER_CAPTURE_MAX_HEIGHT = 720
 const userRole = ref(localStorage.getItem('userRole') || 'operator')
 const isAdmin = userRole.value === 'admin'
 const SCAN_COOLDOWN_MS = 1200
@@ -1372,8 +1391,22 @@ const runEnhancedScanLoop = () => {
   lastDecodeAttemptAt = now
   if (isHandlingScan.value) return
 
+  let benchmarkAttemptRecorded = false
+  if (scannerWorkerReady) {
+    ensureBenchmarkSession('camera')
+    activeBenchmarkSession.value.decodeAttempts += 1
+    benchmarkAttemptRecorded = true
+
+    const dispatched = dispatchFrameToScannerWorker(video)
+    if (dispatched || scannerWorkerBusy) {
+      return
+    }
+  }
+
   ensureBenchmarkSession('camera')
-  activeBenchmarkSession.value.decodeAttempts += 1
+  if (!benchmarkAttemptRecorded) {
+    activeBenchmarkSession.value.decodeAttempts += 1
+  }
   const frameMetrics = getAdaptiveFrameMetrics(video)
   captureBenchmarkFrame(frameMetrics)
 
@@ -1394,6 +1427,17 @@ let cachedFrameMetrics = null
 let cameraStartupHintTimer = null
 let videoReadyTimer = null
 let deferredTrackConstraintsTimer = null
+let warmCameraStream = null
+let warmCameraPrimePromise = null
+let warmCameraReleaseTimer = null
+let scannerWorker = null
+let scannerWorkerReady = false
+let scannerWorkerBusy = false
+let scannerWorkerDisabled = false
+let scannerWorkerRequestSeq = 0
+let scannerWorkerGeneration = 0
+
+const FAST_REOPEN_WINDOW_MS = 12000
 
 const clearVideoReadyTimer = () => {
   if (videoReadyTimer) {
@@ -1407,6 +1451,235 @@ const clearDeferredTrackConstraintsTimer = () => {
     clearTimeout(deferredTrackConstraintsTimer)
     deferredTrackConstraintsTimer = null
   }
+}
+
+const clearWarmCameraReleaseTimer = () => {
+  if (warmCameraReleaseTimer) {
+    clearTimeout(warmCameraReleaseTimer)
+    warmCameraReleaseTimer = null
+  }
+}
+
+const shouldDisableBarcodeDetectorOnPlatform = () => {
+  const ua = window.navigator.userAgent || window.navigator.vendor || ''
+  const isIOSLike = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && window.navigator.maxTouchPoints > 1)
+  if (!isIOSLike) return false
+
+  const match = ua.match(/OS (\d+)_/i)
+  if (!match) return false
+
+  return Number(match[1]) >= 18
+}
+
+const handleScannerWorkerMessage = (event) => {
+  const payload = event.data || {}
+
+  if (payload.type === 'ready') {
+    scannerWorkerReady = true
+    scannerWorkerBusy = false
+    return
+  }
+
+  if (payload.type !== 'frame-result') return
+
+  scannerWorkerBusy = false
+
+  if (!isScanning.value) return
+  if (payload.generation !== scannerWorkerGeneration) return
+
+  if (payload.metrics) {
+    cachedFrameMetrics = payload.metrics
+    lastFrameMetricsAt = performance.now()
+    captureBenchmarkFrame(payload.metrics)
+  }
+
+  if (payload.decodedText) {
+    decodeMissStreak = 0
+    void handleScanResult(payload.decodedText, {
+      sourceMode: 'camera'
+    })
+    return
+  }
+
+  decodeMissStreak = Number.isFinite(payload.missStreak) ? payload.missStreak : (decodeMissStreak + 1)
+}
+
+const disableScannerWorker = (error) => {
+  if (error) {
+    console.warn('Scanner worker is unavailable. Falling back to the main-thread scanner.', error)
+  }
+
+  scannerWorkerReady = false
+  scannerWorkerBusy = false
+  scannerWorkerDisabled = true
+
+  if (scannerWorker) {
+    scannerWorker.terminate()
+    scannerWorker = null
+  }
+}
+
+const initializeScannerWorker = () => {
+  if (scannerWorker || scannerWorkerDisabled || typeof Worker === 'undefined') return
+
+  try {
+    scannerWorker = new Worker(
+      new URL('../workers/scanner.worker.js', import.meta.url),
+      { type: 'module' }
+    )
+    scannerWorker.onmessage = handleScannerWorkerMessage
+    scannerWorker.onerror = (error) => {
+      disableScannerWorker(error)
+    }
+    scannerWorker.postMessage({
+      type: 'init',
+      disableBarcodeDetector: shouldDisableBarcodeDetectorOnPlatform()
+    })
+  } catch (error) {
+    disableScannerWorker(error)
+  }
+}
+
+const resetScannerWorkerState = () => {
+  scannerWorkerBusy = false
+  scannerWorkerGeneration += 1
+
+  if (scannerWorker) {
+    scannerWorker.postMessage({
+      type: 'reset'
+    })
+  }
+}
+
+const buildWorkerFramePayload = async (video) => {
+  const sourceWidth = video.videoWidth || 0
+  const sourceHeight = video.videoHeight || 0
+  if (!sourceWidth || !sourceHeight) return null
+
+  const scale = Math.min(
+    WORKER_CAPTURE_MAX_WIDTH / sourceWidth,
+    WORKER_CAPTURE_MAX_HEIGHT / sourceHeight,
+    1
+  )
+  const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
+  const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
+
+  if (typeof window.createImageBitmap === 'function') {
+    try {
+      const imageBitmap = await window.createImageBitmap(video, {
+        resizeWidth: targetWidth,
+        resizeHeight: targetHeight,
+        resizeQuality: 'high'
+      })
+
+      return {
+        width: targetWidth,
+        height: targetHeight,
+        imageBitmap,
+        transferables: [imageBitmap]
+      }
+    } catch (error) {
+      console.warn('Falling back to ImageData worker payload after ImageBitmap capture failed.', error)
+    }
+  }
+
+  const captureCanvas = scanCanvasCache.workerCaptureCanvas || document.createElement('canvas')
+  scanCanvasCache.workerCaptureCanvas = captureCanvas
+  if (captureCanvas.width !== targetWidth) captureCanvas.width = targetWidth
+  if (captureCanvas.height !== targetHeight) captureCanvas.height = targetHeight
+
+  const captureContext = captureCanvas.getContext('2d', { willReadFrequently: true })
+  if (!captureContext) return null
+
+  captureContext.drawImage(video, 0, 0, targetWidth, targetHeight)
+  const imageData = captureContext.getImageData(0, 0, targetWidth, targetHeight)
+
+  return {
+    width: targetWidth,
+    height: targetHeight,
+    buffer: imageData.data.buffer,
+    transferables: [imageData.data.buffer]
+  }
+}
+
+const dispatchFrameToScannerWorker = (video) => {
+  if (!scannerWorker || !scannerWorkerReady || scannerWorkerBusy) return false
+
+  scannerWorkerBusy = true
+  scannerWorkerRequestSeq += 1
+  const requestId = scannerWorkerRequestSeq
+  const generation = scannerWorkerGeneration
+  const missStreak = decodeMissStreak
+
+  void (async () => {
+    let framePayload = null
+
+    try {
+      framePayload = await buildWorkerFramePayload(video)
+      if (!framePayload) {
+        scannerWorkerBusy = false
+        return
+      }
+
+      if (!scannerWorker || !scannerWorkerReady || !isScanning.value || generation !== scannerWorkerGeneration) {
+        framePayload.imageBitmap?.close?.()
+        scannerWorkerBusy = false
+        return
+      }
+
+      scannerWorker.postMessage({
+        type: 'decode-frame',
+        requestId,
+        generation,
+        missStreak,
+        ...framePayload
+      }, framePayload.transferables || [])
+    } catch (error) {
+      framePayload?.imageBitmap?.close?.()
+      scannerWorkerBusy = false
+      disableScannerWorker(error)
+    }
+  })()
+
+  return true
+}
+
+const isReusableCameraStream = (mediaStream) => {
+  if (!mediaStream) return false
+  return mediaStream.getTracks().every((track) => track.readyState === 'live')
+}
+
+const releaseWarmCameraStream = () => {
+  clearWarmCameraReleaseTimer()
+  if (warmCameraStream) {
+    safeStopStream(warmCameraStream)
+    warmCameraStream = null
+  }
+}
+
+const preserveCameraForFastReopen = (mediaStream) => {
+  if (!isReusableCameraStream(mediaStream)) {
+    safeStopStream(mediaStream)
+    return
+  }
+
+  warmCameraStream = mediaStream
+  clearWarmCameraReleaseTimer()
+  warmCameraReleaseTimer = window.setTimeout(() => {
+    releaseWarmCameraStream()
+  }, FAST_REOPEN_WINDOW_MS)
+}
+
+const consumeWarmCameraStream = () => {
+  if (!isReusableCameraStream(warmCameraStream)) {
+    releaseWarmCameraStream()
+    return null
+  }
+
+  const reusableStream = warmCameraStream
+  warmCameraStream = null
+  clearWarmCameraReleaseTimer()
+  return reusableStream
 }
 
 const getAdaptiveFrameMetrics = (video) => {
@@ -1429,18 +1702,21 @@ onMounted(async () => {
     return
   }
 
+  initializeScannerWorker()
   void checkPermissions()
   if (isAdmin) {
     void ensureBinsLoaded()
   }
   if (currentMode.value === 'camera') {
+    void primeWarmCamera()
     await autoStartCamera()
   }
   void listDevices()
 })
 
 onBeforeUnmount(() => {
-  stopScanning()
+  stopScanning({ forceRelease: true })
+  disableScannerWorker()
 
   if (typeof removeAudioPrimeListeners === 'function') {
     removeAudioPrimeListeners()
@@ -1452,6 +1728,7 @@ onBeforeUnmount(() => {
   if (operationNoticeTimer) {
     clearTimeout(operationNoticeTimer)
   }
+  releaseWarmCameraStream()
 })
 
 // 检查权限
@@ -1673,6 +1950,32 @@ const requestBasicCameraPermission = async () => {
   })
 }
 
+const primeWarmCamera = async () => {
+  if (stream || warmCameraPrimePromise || warmCameraStream || currentMode.value !== 'camera') {
+    return warmCameraPrimePromise
+  }
+
+  warmCameraPrimePromise = (async () => {
+    try {
+      const primerStream = await requestBasicCameraPermission()
+      if (!isReusableCameraStream(primerStream)) {
+        safeStopStream(primerStream)
+        return null
+      }
+
+      preserveCameraForFastReopen(primerStream)
+      return primerStream
+    } catch (error) {
+      console.warn('Warm camera prime failed:', error)
+      return null
+    } finally {
+      warmCameraPrimePromise = null
+    }
+  })()
+
+  return warmCameraPrimePromise
+}
+
 const requestCameraStreamWithTimeout = async (timeoutMs = 2600) => Promise.race([
   requestCameraStream(),
   new Promise((_, reject) => {
@@ -1790,6 +2093,7 @@ const switchMode = async (mode) => {
   currentMode.value = mode
   
   if (mode === 'camera') {
+    void primeWarmCamera()
     await autoStartCamera()
   }
 }
@@ -1805,6 +2109,7 @@ const startScanning = async () => {
     decodeMissStreak = 0
     cachedFrameMetrics = null
     lastFrameMetricsAt = 0
+    resetScannerWorkerState()
     beginBenchmarkSession('camera')
     statusMessage.value = 'Starting camera...'
     statusType.value = 'info'
@@ -1816,7 +2121,10 @@ const startScanning = async () => {
       }
     }, 1800)
 
-    const primerStream = await requestBasicCameraPermission()
+    const primerStream =
+      consumeWarmCameraStream() ||
+      (await warmCameraPrimePromise) ||
+      (await requestBasicCameraPermission())
     attachStreamToVideo(primerStream)
 
     if (cameraStartupHintTimer) {
@@ -1894,12 +2202,13 @@ const startScanning = async () => {
 }
 
 // 停止扫描
-const stopScanning = async () => {
+const stopScanning = async ({ forceRelease = false } = {}) => {
   isScanning.value = false
   isVideoFrameReady.value = false
   decodeMissStreak = 0
   cachedFrameMetrics = null
   lastFrameMetricsAt = 0
+  resetScannerWorkerState()
   clearVideoReadyTimer()
   clearDeferredTrackConstraintsTimer()
   stopScanLoop()
@@ -1918,7 +2227,11 @@ const stopScanning = async () => {
   }
   
   if (stream) {
-    safeStopStream(stream)
+    if (forceRelease) {
+      safeStopStream(stream)
+    } else {
+      preserveCameraForFastReopen(stream)
+    }
     stream = null
   }
   
@@ -3038,12 +3351,33 @@ const playActionSuccessSound = () => {
 }
 
 .workflow-guide-compact-item {
-  border-radius: 12px;
-  border: 1px solid #dbe3f0;
-  background: #f8fafc;
-  padding: 11px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.6);
+  padding: 12px 14px;
   color: #334155;
-  line-height: 1.5;
+  line-height: 1.55;
+}
+
+.workflow-guide-glass-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.workflow-guide-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+  font-size: 0.78rem;
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 .result-item {
@@ -3367,44 +3701,48 @@ const playActionSuccessSound = () => {
   align-items: center;
   gap: 14px;
   margin-bottom: 16px;
-  padding: 16px 18px;
-  border-radius: 16px;
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid transparent;
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
+  padding: 14px 16px;
+  border-radius: 20px;
+  backdrop-filter: blur(24px) saturate(135%);
+  -webkit-backdrop-filter: blur(24px) saturate(135%);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.1);
 }
 
 .operation-toast.success {
-  background: rgba(236, 253, 245, 0.92);
-  border-color: rgba(16, 185, 129, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74) 0%, rgba(248, 250, 252, 0.9) 100%),
+    linear-gradient(90deg, rgba(52, 211, 153, 0.12) 0%, rgba(125, 211, 252, 0.1) 100%);
+  border-color: rgba(148, 163, 184, 0.18);
 }
 
 .operation-toast.error {
-  background: rgba(254, 242, 242, 0.94);
-  border-color: rgba(239, 68, 68, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.8) 0%, rgba(254, 242, 242, 0.92) 100%);
+  border-color: rgba(248, 113, 113, 0.22);
 }
 
 .operation-toast-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: 999px;
-  font-size: 1rem;
+  font-size: 0.98rem;
   font-weight: 700;
   flex-shrink: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 
 .operation-toast.success .operation-toast-icon {
-  background: rgba(16, 185, 129, 0.14);
-  color: #059669;
+  background: rgba(15, 23, 42, 0.07);
+  color: #0f172a;
 }
 
 .operation-toast.error .operation-toast-icon {
-  background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
 }
 
 .operation-toast-copy strong {
@@ -3582,12 +3920,15 @@ const playActionSuccessSound = () => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.12), transparent 38%),
+    rgba(15, 23, 42, 0.38);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
   overflow-y: auto;
   padding: 24px 16px;
   box-sizing: border-box;
@@ -3598,41 +3939,74 @@ const playActionSuccessSound = () => {
 }
 
 .modal-content {
-  background: white;
-  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(248, 250, 252, 0.9) 100%);
+  border-radius: 28px;
   width: 90%;
   max-width: 500px;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow:
+    0 28px 70px rgba(15, 23, 42, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
   max-height: min(88vh, 760px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.glass-panel {
+  backdrop-filter: blur(26px) saturate(135%);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
 }
 
 .action-feedback-modal {
   align-items: center;
   text-align: center;
-  gap: 14px;
-  padding: 28px 24px 24px;
-  max-width: 360px;
+  gap: 16px;
+  padding: 32px 24px 24px;
+  max-width: 380px;
 }
 
-.action-feedback-icon {
+.action-feedback-orb {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 64px;
-  height: 64px;
+  width: 72px;
+  height: 72px;
   border-radius: 999px;
-  background: rgba(16, 185, 129, 0.12);
-  color: #059669;
-  font-size: 1.75rem;
-  font-weight: 800;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(226, 232, 240, 0.94) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #0f172a;
+  font-size: 1.65rem;
+  font-weight: 700;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 18px 36px rgba(15, 23, 42, 0.08);
+}
+
+.action-feedback-copy-block {
+  display: grid;
+  gap: 8px;
+}
+
+.action-feedback-eyebrow,
+.modal-eyebrow,
+.outbound-summary-eyebrow {
+  display: inline-flex;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #64748b;
 }
 
 .action-feedback-modal h3 {
   margin: 0;
-  font-size: 1.35rem;
+  font-size: 1.45rem;
   color: #0f172a;
+  letter-spacing: -0.02em;
 }
 
 .action-feedback-modal p {
@@ -3643,59 +4017,84 @@ const playActionSuccessSound = () => {
 
 .action-feedback-btn {
   width: 100%;
-  margin-top: 6px;
-  min-height: 48px;
+  margin-top: 2px;
+  min-height: 50px;
 }
 
 .modal-header {
-  padding: 20px 24px;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 20px 24px 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
+}
+
+.modal-header-glass {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.54) 0%, rgba(255, 255, 255, 0.18) 100%);
+}
+
+.modal-header-copy {
+  display: grid;
+  gap: 6px;
 }
 
 .modal-header h3 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1.95rem;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
   color: #111827;
 }
 
 .close-btn {
-  background: none;
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.16);
   font-size: 1.5rem;
-  color: #6b7280;
+  color: #64748b;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .form-body {
   padding: 24px;
   overflow-y: auto;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0) 100%);
 }
 
 .form-group {
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 
 .form-group label {
   display: block;
-  font-weight: 500;
-  margin-bottom: 8px;
-  color: #374151;
+  font-weight: 600;
+  margin-bottom: 9px;
+  color: #334155;
+  letter-spacing: -0.02em;
 }
 
 .input-field {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
+  padding: 13px 15px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
   font-size: 1rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: #0f172a;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .disabled-input {
-  background-color: #f3f4f6;
-  color: #6b7280;
+  background-color: rgba(248, 250, 252, 0.72);
+  color: #94a3b8;
   cursor: not-allowed;
 }
 
@@ -3712,41 +4111,49 @@ const playActionSuccessSound = () => {
 
 .outbound-plan-list {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .outbound-mode-toggle {
   display: inline-flex;
   width: 100%;
-  padding: 4px;
-  gap: 4px;
-  border-radius: 12px;
-  background: #e2e8f0;
+  padding: 5px;
+  gap: 6px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(226, 232, 240, 0.8) 0%, rgba(241, 245, 249, 0.94) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
 .outbound-mode-btn {
   flex: 1;
-  min-height: 42px;
+  min-height: 48px;
   border: none;
-  border-radius: 10px;
+  border-radius: 14px;
   background: transparent;
-  color: #475569;
+  color: #64748b;
   font-weight: 700;
   cursor: pointer;
   touch-action: manipulation;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
 }
 
 .outbound-mode-btn.active {
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.92);
   color: #0f172a;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    0 10px 26px rgba(15, 23, 42, 0.08);
 }
 
 .outbound-plan-card {
-  border: 1px solid #dbe3f0;
-  border-radius: 14px;
-  padding: 12px 14px;
-  background: linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  padding: 14px 15px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(248, 250, 252, 0.88) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
 .outbound-plan-step {
@@ -3782,11 +4189,12 @@ const playActionSuccessSound = () => {
 }
 
 .btn-cancel, .btn-primary {
-  padding: 10px 16px;
-  border-radius: 8px;
-  font-weight: 500;
+  padding: 13px 18px;
+  border-radius: 16px;
+  font-weight: 600;
   cursor: pointer;
   touch-action: manipulation;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
 }
 
 .control-btn,
@@ -3803,15 +4211,92 @@ const playActionSuccessSound = () => {
 }
 
 .btn-cancel {
-  background: white;
-  border: 1px solid #d1d5db;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   color: #374151;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
 }
 
 .btn-primary {
-  background: #10b981;
-  border: 1px solid #10b981;
+  background:
+    linear-gradient(180deg, rgba(27, 41, 69, 0.96) 0%, rgba(15, 23, 42, 0.98) 100%);
+  border: 1px solid rgba(15, 23, 42, 0.82);
   color: white;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+.btn-primary:hover,
+.btn-primary:active {
+  transform: translateY(-1px);
+}
+
+.outbound-summary-card {
+  margin-bottom: 18px;
+  padding: 16px;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74) 0%, rgba(241, 245, 249, 0.94) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 16px 30px rgba(15, 23, 42, 0.06);
+}
+
+.outbound-summary-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.outbound-summary-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.07);
+  color: #0f172a;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.outbound-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.outbound-summary-field {
+  padding: 12px 13px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.outbound-summary-field-wide {
+  grid-column: 1 / -1;
+}
+
+.outbound-summary-field span {
+  display: block;
+  font-size: 0.76rem;
+  color: #64748b;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.outbound-summary-field strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 0.98rem;
+  line-height: 1.45;
 }
 
 .btn-primary:disabled {
@@ -3995,11 +4480,15 @@ const playActionSuccessSound = () => {
     width: 100%;
     max-width: none;
     max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px);
-    border-radius: 18px;
+    border-radius: 26px;
   }
 
   .modal-header {
-    padding: 16px 18px;
+    padding: 18px 18px 16px;
+  }
+
+  .modal-header h3 {
+    font-size: 1.72rem;
   }
 
   .form-body {
@@ -4014,14 +4503,26 @@ const playActionSuccessSound = () => {
     z-index: 2;
     margin: 20px -18px -18px;
     padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
-    background: rgba(255, 255, 255, 0.96);
-    border-top: 1px solid #e5e7eb;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(248, 250, 252, 0.96) 100%);
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
   }
 
   .btn-cancel,
   .btn-primary {
     flex: 1 1 140px;
     min-height: 44px;
+  }
+
+  .outbound-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .outbound-summary-topline {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>
