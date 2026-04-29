@@ -511,6 +511,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AvatarUpload from './AvatarUpload.vue'
+import { isHandheldClient } from '@/utils/device'
 
 const router = useRouter()
 const username = ref('Admin')
@@ -537,7 +538,7 @@ const suggestionSummary = ref({
 })
 
 const checkDevice = () => {
-  isMobile.value = window.innerWidth <= 768
+  isMobile.value = isHandheldClient()
 }
 
 const isSidebarCollapsed = computed(() => {

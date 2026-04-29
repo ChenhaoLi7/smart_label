@@ -5,6 +5,9 @@ const { defineConfig } = require('@vue/cli-service')
 const CERT_DIR = path.resolve(__dirname, 'certs')
 const CERT_PATH = path.join(CERT_DIR, 'cert.pem')
 const KEY_PATH = path.join(CERT_DIR, 'key.pem')
+const HOME_SCREEN_VERSION = 'pilot-system-home-20260423'
+const APPLE_TOUCH_ICON = `pilot-system-home-icon.png?v=${HOME_SCREEN_VERSION}`
+const MANIFEST_ID = `/?app=${HOME_SCREEN_VERSION}`
 
 const httpsOptions =
   fs.existsSync(CERT_PATH) && fs.existsSync(KEY_PATH)
@@ -39,7 +42,7 @@ module.exports = defineConfig({
         changeOrigin: true
       }
     },
-    onListening(server) {
+    onListening() {
       if (!httpsOptions) {
         console.warn(
           '[devServer] 未检测到 certs/cert.pem 与 certs/key.pem，已回退为 HTTP。'
@@ -48,25 +51,34 @@ module.exports = defineConfig({
     }
   },
   pwa: {
-    name: 'Smart Warehouse',
+    name: 'Pilot System',
     themeColor: '#000000',
     msTileColor: '#000000',
     appleMobileWebAppCapable: 'yes',
     appleMobileWebAppStatusBarStyle: 'black',
     iconPaths: {
-      favicon32: 'favicon.ico',
-      favicon16: 'favicon.ico',
-      appleTouchIcon: 'icon-192.png',
+      favicon32: 'favicon-32.png?v=2',
+      favicon16: 'favicon-16.png?v=2',
+      appleTouchIcon: APPLE_TOUCH_ICON,
       maskIcon: 'icon-192.png',
       msTileImage: 'icon-192.png'
     },
     manifestOptions: {
+      id: MANIFEST_ID,
+      name: 'Pilot System',
+      short_name: 'Pilot System',
       background_color: '#ffffff',
       display: 'standalone',
       orientation: 'any',
-      start_url: '/',
+      start_url: MANIFEST_ID,
       scope: '/',
       icons: [
+        {
+          src: './pilot-system-home-180.png',
+          sizes: '180x180',
+          type: 'image/png',
+          purpose: 'any'
+        },
         {
           src: './icon-192.png',
           sizes: '192x192',

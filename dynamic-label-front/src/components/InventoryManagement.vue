@@ -795,6 +795,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import BarcodeItemLookup from './BarcodeItemLookup.vue'
+import { isHandheldClient } from '@/utils/device'
 
 const router = useRouter()
 const showBarcodeLookup = ref(false)
@@ -978,7 +979,7 @@ const filteredItems = computed(() => {
 })
 
 const filteredLots = computed(() => {
-  let filtered = lots.value
+  let filtered = lots.value.filter((lot) => Number(lot.qty || 0) > 0)
 
   if (searchQuery.value) {
     const needle = searchQuery.value.toLowerCase()
@@ -1330,7 +1331,7 @@ const countDeltaTone = computed(() => {
 })
 
 const checkDevice = () => {
-  isMobile.value = window.innerWidth <= 768
+  isMobile.value = isHandheldClient()
 }
 
 watch(activeTab, (newTab) => {

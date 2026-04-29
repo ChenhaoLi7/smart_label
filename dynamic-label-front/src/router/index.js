@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { isHandheldClient } from '@/utils/device'
 import UserLogin from '../components/UserLogin.vue'
 import Register from '../components/Register.vue'
 import ForgotPassword from '../components/ForgotPassword.vue'
@@ -93,16 +94,6 @@ const router = createRouter({
   history: createWebHistory(process.env.BASE_URL),
   routes
 })
-
-const isHandheldClient = () => {
-  if (typeof window === 'undefined') return false
-
-  const ua = window.navigator.userAgent || window.navigator.vendor || ''
-  const isMobileUa = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)
-  const isTouchMac = /Macintosh/i.test(ua) && window.navigator.maxTouchPoints > 1
-
-  return isMobileUa || isTouchMac
-}
 
 const blockedRoutes = ['/label-design', '/purchase-management', '/sales-management', '/production-management']
 
