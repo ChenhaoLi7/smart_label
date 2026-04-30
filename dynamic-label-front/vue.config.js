@@ -24,6 +24,7 @@ module.exports = defineConfig({
     allowedHosts: 'all',
     port: 8080,
     https: httpsOptions || undefined,
+    historyApiFallback: true,
     headers: {
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
       Pragma: 'no-cache',

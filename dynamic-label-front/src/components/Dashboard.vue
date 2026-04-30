@@ -122,6 +122,21 @@
                 </span>
               </a>
 
+              <a v-if="isAdmin" href="#" class="nav-link" @click.prevent="goToScannerPerformance">
+                <span class="nav-glyph">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+                    <path d="M4 19V5"/>
+                    <path d="M4 19h16"/>
+                    <path d="m7 15 3-4 3 2 4-7"/>
+                    <path d="M17 6h3v3"/>
+                  </svg>
+                </span>
+                <span class="nav-copy">
+                  <strong>Scan Metrics</strong>
+                  <small>Decode speed and quality</small>
+                </span>
+              </a>
+
               <a v-if="isAdmin" href="#" class="nav-link" @click.prevent="goToAiAssistant">
                 <span class="nav-glyph">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
@@ -698,6 +713,12 @@ const primaryActions = computed(() => [
     icon: tileIcon('M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z')
   },
   ...(isAdmin.value ? [{
+    label: 'Scan Metrics',
+    description: 'Measure scanner speed and failure scenarios',
+    run: goToScannerPerformance,
+    icon: tileIcon('M4 19V5M4 19h16M7 15l3-4 3 2 4-7M17 6h3v3')
+  }] : []),
+  ...(isAdmin.value ? [{
     label: 'User Access',
     description: 'Review team accounts and admin access',
     run: goToUserAccess,
@@ -910,6 +931,10 @@ function goToSuggestions() {
 
 function goToUserAccess() {
   router.push('/user-access')
+}
+
+function goToScannerPerformance() {
+  router.push('/scanner-performance')
 }
 
 function goToAiAssistant() {

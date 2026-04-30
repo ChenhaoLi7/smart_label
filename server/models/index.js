@@ -16,6 +16,7 @@ const SalesOrder = require('./SalesOrder')
 const SalesOrderLine = require('./SalesOrderLine')
 const PrintJob = require('./PrintJob')
 const ScanLog = require('./ScanLog')
+const ScannerBenchmark = require('./ScannerBenchmark')
 const BOMHeader = require('./BOMHeader')
 const BOMLine = require('./BOMLine')
 const WorkOrder = require('./WorkOrder')
@@ -152,6 +153,7 @@ const syncDatabase = async () => {
     await PrintJob.sync()
     await ensurePrintJobSchema()
     await ScanLog.sync()
+    await ScannerBenchmark.sync()
     // await BillOfMaterials.sync() // Deprecated
     await BOMHeader.sync()
     await BOMLine.sync()
@@ -180,6 +182,7 @@ module.exports = {
   SalesOrderLine,
   PrintJob,
   ScanLog,
+  ScannerBenchmark,
   BOMHeader,
   BOMLine,
   WorkOrder,

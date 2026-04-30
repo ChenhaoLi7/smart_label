@@ -13,6 +13,7 @@ import ProductionManagement from '../components/ProductionManagement.vue'
 import AiAssistant from '../components/AiAssistant.vue'
 import SuggestionCenter from '../components/SuggestionCenter.vue'
 import UserAccessManagement from '../components/UserAccessManagement.vue'
+import ScannerPerformance from '../components/ScannerPerformance.vue'
 
 const routes = [
   {
@@ -53,6 +54,11 @@ const routes = [
     path: '/user-access',
     name: 'UserAccessManagement',
     component: UserAccessManagement
+  },
+  {
+    path: '/scanner-performance',
+    name: 'ScannerPerformance',
+    component: ScannerPerformance
   },
   {
     path: '/advanced-scan',

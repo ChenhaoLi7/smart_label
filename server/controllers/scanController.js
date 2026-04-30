@@ -1,7 +1,31 @@
 const { verifyJWS } = require('../utils/jwsSigner')
 const sequelize = require('../config/database')
 const { Op } = require('sequelize')
-const { Item, Bin, Lot, PurchaseOrder, PurchaseOrderLine, SalesOrder, SalesOrderLine, Transaction, ScanLog } = require('../models')
+const { Item, Bin, Lot, PurchaseOrder, PurchaseOrderLine, SalesOrder, SalesOrderLine, Transaction, ScanLog, ScannerBenchmark } = require('../models')
+
+const toFiniteNumber = (value, fallback = null) => {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+const toInteger = (value, fallback = 0) => {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? Math.round(numeric) : fallback
+}
+
+const parseDateOrNull = (value) => {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+const getRequestIp = (req) => {
+  const forwarded = req.headers['x-forwarded-for']
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim()
+  }
+  return req.ip || req.socket?.remoteAddress || null
+}
 
 const parseScannedPayload = async (raw) => {
   // 解析JWS
@@ -372,6 +396,212 @@ const handleScan = async (req, res) => {
     res.status(500).json({
       success: false,
       message: '扫码处理失败',
+      error: error.message
+    })
+  }
+}
+
+const recordScannerBenchmark = async (req, res) => {
+  try {
+    const body = req.body || {}
+    const sessionId = String(body.id || body.sessionId || '').trim()
+
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing scanner benchmark session id.'
+      })
+    }
+
+    const rawContent = body.rawData == null ? '' : String(body.rawData)
+    const completedAt = parseDateOrNull(body.completedAtIso || body.completedAt)
+    const startedAt = parseDateOrNull(body.startedAt)
+
+    await ScannerBenchmark.upsert({
+      session_id: sessionId,
+      mode: String(body.mode || 'camera').slice(0, 30),
+      status: String(body.status || 'unknown').slice(0, 40),
+      label_type: String(body.labelType || 'UNKNOWN').slice(0, 40),
+      raw_content: rawContent ? rawContent.slice(0, 4000) : null,
+      raw_length: rawContent.length,
+      device_id: body.deviceId ? String(body.deviceId).slice(0, 160) : null,
+      device_label: body.deviceLabel ? String(body.deviceLabel).slice(0, 240) : null,
+      user_id: req.user?.id || null,
+      user_name: req.user?.username || req.user?.email || null,
+      user_agent: String(req.headers['user-agent'] || '').slice(0, 500) || null,
+      ip_address: getRequestIp(req),
+      started_at: startedAt,
+      completed_at: completedAt || new Date(),
+      lock_ms: toInteger(body.lockMs, null),
+      first_frame_ms: toInteger(body.firstFrameMs, null),
+      decode_attempts: toInteger(body.decodeAttempts, 0),
+      frame_samples: toInteger(body.frameSamples, 0),
+      avg_frame_score: toFiniteNumber(body.avgFrameScore),
+      best_frame_score: toFiniteNumber(body.bestFrameScore),
+      worst_frame_score: toFiniteNumber(body.worstFrameScore),
+      avg_brightness: toFiniteNumber(body.avgBrightness),
+      low_light_frames: toInteger(body.lowLightFrames, 0),
+      blurry_frames: toInteger(body.blurryFrames, 0),
+      decode_path: body.decodePath ? String(body.decodePath).slice(0, 120) : null,
+      decoded_format: body.decodedFormat ? String(body.decodedFormat).slice(0, 80) : null,
+      decode_engine: body.decodeEngine ? String(body.decodeEngine).slice(0, 80) : null,
+      fill_ratio: toFiniteNumber(body.fillRatio),
+      scenario_tags: Array.isArray(body.scenarioTags) ? body.scenarioTags.slice(0, 12) : [],
+      payload: body
+    })
+
+    return res.json({
+      success: true,
+      message: 'Scanner benchmark recorded.'
+    })
+  } catch (error) {
+    console.error('Scanner benchmark save failed:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Scanner benchmark save failed.',
+      error: error.message
+    })
+  }
+}
+
+const summarizeBy = (rows, key) => {
+  const groups = new Map()
+
+  rows.forEach((row) => {
+    const label = row[key] || 'UNKNOWN'
+    const current = groups.get(label) || {
+      label,
+      total: 0,
+      success: 0,
+      lockTotal: 0,
+      lockSamples: 0
+    }
+
+    current.total += 1
+    if (row.status === 'success') {
+      current.success += 1
+      if (Number.isFinite(Number(row.lock_ms))) {
+        current.lockTotal += Number(row.lock_ms)
+        current.lockSamples += 1
+      }
+    }
+
+    groups.set(label, current)
+  })
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      label: group.label,
+      total: group.total,
+      success: group.success,
+      successRate: group.total ? group.success / group.total : 0,
+      avgLockMs: group.lockSamples ? Math.round(group.lockTotal / group.lockSamples) : null
+    }))
+    .sort((a, b) => b.total - a.total)
+}
+
+const summarizeScenarioTags = (rows) => {
+  const groups = new Map()
+
+  rows.forEach((row) => {
+    const tags = Array.isArray(row.scenario_tags) ? row.scenario_tags : []
+
+    tags.forEach((tag) => {
+      const label = String(tag || '').trim()
+      if (!label) return
+
+      const current = groups.get(label) || {
+        label,
+        total: 0,
+        success: 0,
+        lockTotal: 0,
+        lockSamples: 0
+      }
+
+      current.total += 1
+      if (row.status === 'success') {
+        current.success += 1
+        if (Number.isFinite(Number(row.lock_ms))) {
+          current.lockTotal += Number(row.lock_ms)
+          current.lockSamples += 1
+        }
+      }
+
+      groups.set(label, current)
+    })
+  })
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      label: group.label,
+      total: group.total,
+      success: group.success,
+      successRate: group.total ? group.success / group.total : 0,
+      avgLockMs: group.lockSamples ? Math.round(group.lockTotal / group.lockSamples) : null
+    }))
+    .sort((a, b) => b.total - a.total)
+}
+
+const getScannerBenchmarkSummary = async (req, res) => {
+  try {
+    const days = Math.min(Math.max(Number(req.query.days || 14), 1), 90)
+    const since = new Date(Date.now() - (days * 24 * 60 * 60 * 1000))
+
+    const rows = await ScannerBenchmark.findAll({
+      where: {
+        completed_at: {
+          [Op.gte]: since
+        }
+      },
+      order: [['completed_at', 'DESC']],
+      limit: 1000
+    })
+
+    const plainRows = rows.map((row) => row.toJSON())
+    const successfulRows = plainRows.filter((row) => row.status === 'success')
+    const lockRows = successfulRows.filter((row) => Number.isFinite(Number(row.lock_ms)))
+    const firstFrameRows = plainRows.filter((row) => Number.isFinite(Number(row.first_frame_ms)))
+    const totalLockMs = lockRows.reduce((sum, row) => sum + Number(row.lock_ms), 0)
+    const totalFirstFrameMs = firstFrameRows.reduce((sum, row) => sum + Number(row.first_frame_ms), 0)
+
+    return res.json({
+      success: true,
+      data: {
+        days,
+        total: plainRows.length,
+        success: successfulRows.length,
+        successRate: plainRows.length ? successfulRows.length / plainRows.length : 0,
+        avgLockMs: lockRows.length ? Math.round(totalLockMs / lockRows.length) : null,
+        avgFirstFrameMs: firstFrameRows.length ? Math.round(totalFirstFrameMs / firstFrameRows.length) : null,
+        byLabelType: summarizeBy(plainRows, 'label_type'),
+        byMode: summarizeBy(plainRows, 'mode'),
+        byDecodeEngine: summarizeBy(plainRows, 'decode_engine'),
+        byDecodedFormat: summarizeBy(plainRows, 'decoded_format'),
+        byScenarioTag: summarizeScenarioTags(plainRows),
+        recent: plainRows.slice(0, 20).map((row) => ({
+          id: row.id,
+          sessionId: row.session_id,
+          mode: row.mode,
+          status: row.status,
+          labelType: row.label_type,
+          lockMs: row.lock_ms,
+          firstFrameMs: row.first_frame_ms,
+          avgFrameScore: row.avg_frame_score,
+          avgBrightness: row.avg_brightness,
+          fillRatio: row.fill_ratio,
+          decodedFormat: row.decoded_format,
+          decodeEngine: row.decode_engine,
+          decodePath: row.decode_path,
+          scenarioTags: row.scenario_tags || [],
+          completedAt: row.completed_at
+        }))
+      }
+    })
+  } catch (error) {
+    console.error('Scanner benchmark summary failed:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Scanner benchmark summary failed.',
       error: error.message
     })
   }
@@ -1185,6 +1415,8 @@ const executeMove = async (req, res) => {
 
 module.exports = {
   handleScan,
+  recordScannerBenchmark,
+  getScannerBenchmarkSummary,
   getInventoryInquiry,
   executeInbound,
   executeOutbound,

@@ -1225,6 +1225,8 @@ const createBenchmarkSession = (mode = currentMode.value) => ({
   status: 'pending',
   frameSamples: 0,
   frameScoreTotal: 0,
+  bestFrameScore: null,
+  worstFrameScore: null,
   brightnessTotal: 0,
   lowLightFrames: 0,
   blurryFrames: 0,
@@ -1236,6 +1238,12 @@ const createBenchmarkSession = (mode = currentMode.value) => ({
   ),
   labelType: 'PENDING',
   lockMs: null,
+  firstFrameMs: null,
+  decodePath: '',
+  decodedFormat: '',
+  decodeEngine: '',
+  fillRatio: null,
+  scenarioTags: [],
   completedAt: null
 })
 
@@ -1274,10 +1282,64 @@ const captureBenchmarkFrame = (metrics) => {
   if (!activeBenchmarkSession.value || !metrics) return
 
   activeBenchmarkSession.value.frameSamples += 1
-  activeBenchmarkSession.value.frameScoreTotal += Number(metrics.score || 0)
+  const frameScore = Number(metrics.score || 0)
+  activeBenchmarkSession.value.frameScoreTotal += frameScore
+  activeBenchmarkSession.value.bestFrameScore = activeBenchmarkSession.value.bestFrameScore == null
+    ? frameScore
+    : Math.max(activeBenchmarkSession.value.bestFrameScore, frameScore)
+  activeBenchmarkSession.value.worstFrameScore = activeBenchmarkSession.value.worstFrameScore == null
+    ? frameScore
+    : Math.min(activeBenchmarkSession.value.worstFrameScore, frameScore)
   activeBenchmarkSession.value.brightnessTotal += Number(metrics.brightness || 0)
   if (metrics.lowLight) activeBenchmarkSession.value.lowLightFrames += 1
   if (metrics.blurry) activeBenchmarkSession.value.blurryFrames += 1
+}
+
+const captureBenchmarkDecode = (decoded = {}) => {
+  if (!activeBenchmarkSession.value || !decoded) return
+
+  if (decoded.label) activeBenchmarkSession.value.decodePath = decoded.label
+  if (decoded.format) activeBenchmarkSession.value.decodedFormat = decoded.format
+  if (decoded.engine) activeBenchmarkSession.value.decodeEngine = decoded.engine
+  if (decoded.fillRatio != null) activeBenchmarkSession.value.fillRatio = decoded.fillRatio
+}
+
+const captureBenchmarkFirstFrame = () => {
+  if (!activeBenchmarkSession.value) return
+  if (activeBenchmarkSession.value.firstFrameMs != null) return
+
+  activeBenchmarkSession.value.firstFrameMs = performance.now() - activeBenchmarkSession.value.startPerf
+}
+
+const inferBenchmarkScenarioTags = (session, {
+  status,
+  labelType,
+  rawData,
+  lockMs,
+  avgFrameScore,
+  avgBrightness
+}) => {
+  const tags = new Set(Array.isArray(session.scenarioTags) ? session.scenarioTags : [])
+  const frameSamples = Number(session.frameSamples || 0)
+  const lowLightRatio = frameSamples ? session.lowLightFrames / frameSamples : 0
+  const blurryRatio = frameSamples ? session.blurryFrames / frameSamples : 0
+  const normalizedLabelType = String(labelType || '').toUpperCase()
+  const normalizedFormat = String(session.decodedFormat || '').toUpperCase()
+
+  if (status === 'success') tags.add('decoded')
+  if (status !== 'success') tags.add('not-decoded')
+  if (session.firstFrameMs != null && session.firstFrameMs > 2500) tags.add('slow-camera-open')
+  if (status === 'success' && lockMs > 3000) tags.add('slow-lock')
+  if (status === 'success' && lockMs <= 1200) tags.add('fast-lock')
+  if (frameSamples > 0 && (lowLightRatio >= 0.25 || avgBrightness < 96)) tags.add('low-light')
+  if (frameSamples > 0 && blurryRatio >= 0.25) tags.add('blur-risk')
+  if (frameSamples > 0 && avgFrameScore < 0.45) tags.add('low-frame-quality')
+  if (/QR/.test(normalizedFormat)) tags.add('two-dimensional')
+  if (/CODE|EAN|UPC|CODABAR|ITF/.test(normalizedFormat)) tags.add('one-dimensional')
+  if (normalizedLabelType) tags.add(`label-${normalizedLabelType.toLowerCase()}`)
+  if (String(rawData || '').length > 120) tags.add('large-payload')
+
+  return Array.from(tags).slice(0, 12)
 }
 
 const finalizeBenchmarkSession = ({ status, labelType = 'UNKNOWN', rawData = '' } = {}) => {
@@ -1288,6 +1350,14 @@ const finalizeBenchmarkSession = ({ status, labelType = 'UNKNOWN', rawData = '' 
   const lockMs = performance.now() - session.startPerf
   const avgFrameScore = session.frameSamples ? session.frameScoreTotal / session.frameSamples : 0
   const avgBrightness = session.frameSamples ? session.brightnessTotal / session.frameSamples : 0
+  const scenarioTags = inferBenchmarkScenarioTags(session, {
+    status,
+    labelType,
+    rawData,
+    lockMs,
+    avgFrameScore,
+    avgBrightness
+  })
 
   const completedSession = {
     ...session,
@@ -1298,7 +1368,8 @@ const finalizeBenchmarkSession = ({ status, labelType = 'UNKNOWN', rawData = '' 
     completedAtIso: new Date(completedAt).toISOString(),
     lockMs,
     avgFrameScore,
-    avgBrightness
+    avgBrightness,
+    scenarioTags
   }
 
   activeBenchmarkSession.value = null
@@ -1368,6 +1439,7 @@ const decodeCurrentVideoFrame = (video) => {
   }
 
   decodeMissStreak = 0
+  captureBenchmarkDecode(decoded)
   return String(decoded.text).trim()
 }
 
@@ -1495,6 +1567,12 @@ const handleScannerWorkerMessage = (event) => {
 
   if (payload.decodedText) {
     decodeMissStreak = 0
+    captureBenchmarkDecode({
+      label: payload.decodePath,
+      format: payload.decodedFormat,
+      engine: payload.decodeEngine,
+      fillRatio: payload.fillRatio
+    })
     void handleScanResult(payload.decodedText, {
       sourceMode: 'camera'
     })
@@ -2069,6 +2147,7 @@ const handleVideoFrameReady = () => {
     videoReadyTimer = null
     if (!isScanning.value || !videoRef.value) return
     if (!videoRef.value.videoWidth || !videoRef.value.videoHeight) return
+    captureBenchmarkFirstFrame()
     isVideoFrameReady.value = true
   }, 36)
 }
