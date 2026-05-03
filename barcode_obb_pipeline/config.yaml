@@ -1,0 +1,24 @@
+project:
+  name: quality_aware_rotated_roi_barcode_pipeline
+  results_dir: data/results
+
+data:
+  raw_images: data/raw_images
+  yolo_dataset_yaml: data/yolo_obb_dataset/data.yaml
+
+model:
+  default_model_path: models/best_obb.pt
+  train_model_candidates:
+    - yolo11n-obb.pt
+    - yolov8n-obb.pt
+  confidence: 0.25
+
+preprocessing:
+  small_roi_min_side: 180
+  low_brightness_threshold: 95
+  low_contrast_threshold: 42
+  blur_threshold: 90
+
+evaluation:
+  output_csv: data/results/evaluation.csv
+

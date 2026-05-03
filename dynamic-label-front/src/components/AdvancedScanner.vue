@@ -42,11 +42,28 @@
           
           <!-- 扫描框 -->
           <div class="scan-overlay">
-            <div class="scan-frame">
+            <div :class="['scan-frame', { 'scan-frame-locked': scanCapturePulse && !hasPositionedScanCapture }]">
               <div class="corner top-left"></div>
               <div class="corner top-right"></div>
               <div class="corner bottom-left"></div>
               <div class="corner bottom-right"></div>
+              <div v-if="scanCapturePulse && !hasPositionedScanCapture" class="scan-capture-pulse" aria-live="polite">
+                <span class="scan-capture-dot"></span>
+                <span>{{ scanCaptureMessage }}</span>
+              </div>
+            </div>
+            <div
+              v-if="scanCapturePulse && hasPositionedScanCapture"
+              class="scan-code-lock"
+              :style="scanCaptureOverlayStyle"
+              aria-live="polite"
+            >
+              <span class="scan-code-lock-corner scan-code-lock-top-left"></span>
+              <span class="scan-code-lock-corner scan-code-lock-top-right"></span>
+              <span class="scan-code-lock-corner scan-code-lock-bottom-left"></span>
+              <span class="scan-code-lock-corner scan-code-lock-bottom-right"></span>
+              <span class="scan-code-lock-dot"></span>
+              <span class="scan-code-lock-label">{{ scanCaptureMessage }}</span>
             </div>
             <p class="scan-hint">Please place the barcode inside the frame</p>
           </div>
@@ -64,6 +81,16 @@
             <span class="flash-icon">{{ flashOn ? '💡' : '🔦' }}</span>
             {{ flashOn ? 'Light Off' : 'Light On' }}
           </button>
+          <button
+            @click="triggerRoiAssist('manual')"
+            class="control-btn roi-assist-btn"
+            :disabled="isRoiAssistRunning || !isScanning"
+          >
+            {{ isRoiAssistRunning ? 'Enhancing...' : 'ROI Assist' }}
+          </button>
+        </div>
+        <div v-if="roiAssistStatus" class="roi-assist-status">
+          {{ roiAssistStatus }}
         </div>
 
       </div>
@@ -94,6 +121,29 @@
           @keyup.enter="handleManualSubmit"
         />
         <button @click="handleManualSubmit" class="submit-btn">Confirm</button>
+      </div>
+    </div>
+
+    <div v-if="showMultiCodePicker" class="multi-code-card">
+      <div class="multi-code-header">
+        <div>
+          <span class="multi-code-eyebrow">Context-aware selection</span>
+          <h3>Multiple codes found</h3>
+          <p>Please choose the target label for this warehouse action.</p>
+        </div>
+        <button @click="dismissMultiCodePicker" class="multi-code-close" aria-label="Close multi-code picker">&times;</button>
+      </div>
+      <div class="multi-code-list">
+        <button
+          v-for="candidate in roiAssistCandidates"
+          :key="candidate.candidate_id || candidate.decoded_text"
+          class="multi-code-option"
+          @click="selectRoiCandidate(candidate)"
+        >
+          <span class="multi-code-type">{{ resolveRoiCandidateType(candidate) }}</span>
+          <span class="multi-code-main">{{ candidate.decoded_text }}</span>
+          <span class="multi-code-meta">{{ formatRoiCandidateMeta(candidate) }}</span>
+        </button>
       </div>
     </div>
 
@@ -537,6 +587,9 @@ const scanAction = ref(null) // 保存后端的 action 标识
 const statusMessage = ref('')
 const statusType = ref('info')
 const isVideoFrameReady = ref(false)
+const scanCapturePulse = ref(false)
+const scanCaptureMessage = ref('Code captured')
+const scanCaptureLocation = ref(null)
 const manualCode = ref('')
 const devices = ref([])
 const selectedDevice = ref(localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || '')
@@ -545,6 +598,11 @@ const flashOn = ref(false)
 const scanCanvasCache = {}
 const WORKER_CAPTURE_MAX_WIDTH = 1280
 const WORKER_CAPTURE_MAX_HEIGHT = 720
+const ROI_ASSIST_CAPTURE_MAX_WIDTH = 960
+const ROI_ASSIST_JPEG_QUALITY = 0.72
+const ROI_ASSIST_AUTO_DELAY_MS = 3500
+const ROI_ASSIST_COOLDOWN_MS = 7000
+const ROI_ASSIST_TIMEOUT_MS = 15000
 const userRole = ref(localStorage.getItem('userRole') || 'operator')
 const isAdmin = userRole.value === 'admin'
 const SCAN_COOLDOWN_MS = 1200
@@ -563,8 +621,109 @@ const actionFeedbackModal = ref({
   title: '',
   message: ''
 })
+const isRoiAssistRunning = ref(false)
+const roiAssistStatus = ref('')
+const roiAssistCandidates = ref([])
+const showMultiCodePicker = ref(false)
 let sharedAudioContext = null
 let removeAudioPrimeListeners = null
+let scanCapturePulseTimer = null
+
+const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max)
+
+const normalizeCapturePoint = (point) => {
+  if (!point || typeof point !== 'object') return null
+  const x = Number(point.x ?? point[0])
+  const y = Number(point.y ?? point[1])
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  return { x, y }
+}
+
+const normalizeCapturePoints = (points) => {
+  if (!Array.isArray(points)) return []
+  return points
+    .map(normalizeCapturePoint)
+    .filter(Boolean)
+}
+
+const getScanCaptureBounds = (location) => {
+  const points = normalizeCapturePoints(location?.points)
+  if (!points.length) return null
+
+  const xs = points.map((point) => point.x)
+  const ys = points.map((point) => point.y)
+  let minX = Math.min(...xs)
+  let maxX = Math.max(...xs)
+  let minY = Math.min(...ys)
+  let maxY = Math.max(...ys)
+
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null
+  if (maxX - minX <= 0 && maxY - minY <= 0) return null
+
+  const sourceWidth = Number(location?.imageWidth || location?.frameWidth || 0)
+  const sourceHeight = Number(location?.imageHeight || location?.frameHeight || 0)
+  const minSourceWidth = sourceWidth ? sourceWidth * 0.035 : 18
+  const minSourceHeight = sourceHeight ? sourceHeight * 0.035 : 18
+  const currentWidth = maxX - minX
+  const currentHeight = maxY - minY
+
+  if (currentWidth < minSourceWidth) {
+    const expand = (minSourceWidth - currentWidth) / 2
+    minX -= expand
+    maxX += expand
+  }
+
+  if (currentHeight < minSourceHeight) {
+    const expand = (minSourceHeight - currentHeight) / 2
+    minY -= expand
+    maxY += expand
+  }
+
+  return { minX, maxX, minY, maxY }
+}
+
+const scanCaptureOverlayStyle = computed(() => {
+  const location = scanCaptureLocation.value
+  const bounds = getScanCaptureBounds(location)
+  const video = videoRef.value
+  const stage = video?.parentElement
+  if (!bounds || !video || !stage) return null
+
+  const stageRect = stage.getBoundingClientRect()
+  if (!stageRect.width || !stageRect.height) return null
+
+  const sourceWidth = Number(location?.imageWidth || location?.frameWidth || video.videoWidth || 0)
+  const sourceHeight = Number(location?.imageHeight || location?.frameHeight || video.videoHeight || 0)
+  if (!sourceWidth || !sourceHeight) return null
+
+  // The video uses object-fit: cover, so source pixels must be mapped through the cover crop.
+  const coverScale = Math.max(stageRect.width / sourceWidth, stageRect.height / sourceHeight)
+  const renderedWidth = sourceWidth * coverScale
+  const renderedHeight = sourceHeight * coverScale
+  const offsetX = (stageRect.width - renderedWidth) / 2
+  const offsetY = (stageRect.height - renderedHeight) / 2
+
+  let left = offsetX + (bounds.minX * coverScale)
+  let top = offsetY + (bounds.minY * coverScale)
+  let width = Math.max((bounds.maxX - bounds.minX) * coverScale, 44)
+  let height = Math.max((bounds.maxY - bounds.minY) * coverScale, 44)
+
+  const centerX = left + (width / 2)
+  const centerY = top + (height / 2)
+  width = Math.min(width, stageRect.width - 8)
+  height = Math.min(height, stageRect.height - 8)
+  left = clampNumber(centerX - (width / 2), 4, Math.max(stageRect.width - width - 4, 4))
+  top = clampNumber(centerY - (height / 2), 4, Math.max(stageRect.height - height - 4, 4))
+
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${width}px`,
+    height: `${height}px`
+  }
+})
+
+const hasPositionedScanCapture = computed(() => Boolean(scanCaptureOverlayStyle.value))
 
 // 新建商品相关状态
 const showCreateItemModal = ref(false)
@@ -631,6 +790,7 @@ const hasInteractiveModalOpen = computed(() => (
   showInboundModal.value ||
   showMoveModal.value ||
   showOutboundModal.value ||
+  showMultiCodePicker.value ||
   actionFeedbackModal.value.visible
 ))
 
@@ -769,6 +929,60 @@ const canUseVibrationFeedback = () => {
   const isIOS = /iPhone|iPad|iPod/i.test(ua)
 
   return typeof navigator.vibrate === 'function' && !isIOS
+}
+
+const clearScanCapturePulseTimer = () => {
+  if (scanCapturePulseTimer) {
+    clearTimeout(scanCapturePulseTimer)
+    scanCapturePulseTimer = null
+  }
+}
+
+const hideScanCapturePulse = () => {
+  clearScanCapturePulseTimer()
+  scanCapturePulse.value = false
+  scanCaptureLocation.value = null
+}
+
+const showScanCapturePulse = (message = 'Code captured', location = null) => {
+  scanCaptureMessage.value = message
+  scanCaptureLocation.value = location
+  scanCapturePulse.value = false
+  clearScanCapturePulseTimer()
+
+  window.requestAnimationFrame(() => {
+    scanCapturePulse.value = true
+    scanCapturePulseTimer = window.setTimeout(() => {
+      scanCapturePulse.value = false
+      scanCapturePulseTimer = null
+    }, 920)
+  })
+}
+
+const clearAuthSession = () => {
+  localStorage.removeItem('token')
+  localStorage.removeItem('userRole')
+  localStorage.removeItem('username')
+  localStorage.removeItem('userEmail')
+  localStorage.removeItem('userAvatar')
+}
+
+const isAuthFailure = (status, message = '') => {
+  const normalizedMessage = String(message || '')
+  return status === 401 ||
+    normalizedMessage.includes('认证令牌') ||
+    normalizedMessage.toLowerCase().includes('token')
+}
+
+const handleAuthFailure = (message = 'Login expired. Please sign in again.') => {
+  clearAuthSession()
+  statusMessage.value = message.includes('过期')
+    ? 'Login expired. Please sign in again.'
+    : message
+  statusType.value = 'error'
+  window.setTimeout(() => {
+    router.push('/login')
+  }, 900)
 }
 
 const getSharedAudioContext = () => {
@@ -1435,12 +1649,15 @@ const decodeCurrentVideoFrame = (video) => {
 
   if (!decoded?.text) {
     decodeMissStreak += 1
-    return ''
+    return null
   }
 
   decodeMissStreak = 0
   captureBenchmarkDecode(decoded)
-  return String(decoded.text).trim()
+  return {
+    text: String(decoded.text).trim(),
+    location: decoded.location || null
+  }
 }
 
 const stopScanLoop = () => {
@@ -1462,6 +1679,7 @@ const runEnhancedScanLoop = () => {
   if (now - lastDecodeAttemptAt < 75) return
   lastDecodeAttemptAt = now
   if (isHandlingScan.value) return
+  maybeTriggerAutoRoiAssist(video)
 
   let benchmarkAttemptRecorded = false
   if (scannerWorkerReady) {
@@ -1482,10 +1700,13 @@ const runEnhancedScanLoop = () => {
   const frameMetrics = getAdaptiveFrameMetrics(video)
   captureBenchmarkFrame(frameMetrics)
 
-  const decodedText = decodeCurrentVideoFrame(video)
-  if (!decodedText) return
+  const decoded = decodeCurrentVideoFrame(video)
+  if (!decoded?.text) return
 
-  void handleScanResult(decodedText)
+  void handleScanResult(decoded.text, {
+    sourceMode: 'camera',
+    captureLocation: decoded.location || null
+  })
 }
 
 // ZXing 扫码器
@@ -1508,6 +1729,9 @@ let scannerWorkerBusy = false
 let scannerWorkerDisabled = false
 let scannerWorkerRequestSeq = 0
 let scannerWorkerGeneration = 0
+let roiAssistEligibleAt = 0
+let lastRoiAssistAt = 0
+let roiAssistStatusTimer = null
 
 const FAST_REOPEN_WINDOW_MS = 12000
 
@@ -1530,6 +1754,305 @@ const clearWarmCameraReleaseTimer = () => {
     clearTimeout(warmCameraReleaseTimer)
     warmCameraReleaseTimer = null
   }
+}
+
+const clearRoiAssistStatusTimer = () => {
+  if (roiAssistStatusTimer) {
+    clearTimeout(roiAssistStatusTimer)
+    roiAssistStatusTimer = null
+  }
+}
+
+const setRoiAssistStatus = (message, { autoClearMs = 0 } = {}) => {
+  clearRoiAssistStatusTimer()
+  roiAssistStatus.value = message
+
+  if (autoClearMs > 0) {
+    roiAssistStatusTimer = window.setTimeout(() => {
+      roiAssistStatus.value = ''
+      roiAssistStatusTimer = null
+    }, autoClearMs)
+  }
+}
+
+const resetRoiAssistAutoTimer = () => {
+  roiAssistEligibleAt = Date.now() + ROI_ASSIST_AUTO_DELAY_MS
+}
+
+const captureVideoFrameAsJpeg = (video, {
+  maxWidth = ROI_ASSIST_CAPTURE_MAX_WIDTH,
+  quality = ROI_ASSIST_JPEG_QUALITY
+} = {}) => new Promise((resolve, reject) => {
+  if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    reject(new Error('Live camera frame is not ready.'))
+    return
+  }
+
+  const scale = Math.min(maxWidth / video.videoWidth, 1)
+  const targetWidth = Math.max(1, Math.round(video.videoWidth * scale))
+  const targetHeight = Math.max(1, Math.round(video.videoHeight * scale))
+  const canvas = scanCanvasCache.roiAssistCaptureCanvas || document.createElement('canvas')
+  scanCanvasCache.roiAssistCaptureCanvas = canvas
+  canvas.width = targetWidth
+  canvas.height = targetHeight
+
+  const context = canvas.getContext('2d', { willReadFrequently: false })
+  if (!context) {
+    reject(new Error('Could not create scanner capture canvas.'))
+    return
+  }
+
+  context.drawImage(video, 0, 0, targetWidth, targetHeight)
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      reject(new Error('Could not encode scanner frame.'))
+      return
+    }
+    resolve(blob)
+  }, 'image/jpeg', quality)
+})
+
+const fetchWithTimeout = async (url, options = {}, timeoutMs = ROI_ASSIST_TIMEOUT_MS) => {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+  }
+
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const extractRoiDecodedText = (candidate) => {
+  const directText = String(candidate?.decoded_text || '').trim()
+  if (directText) return directText
+
+  const decodedTexts = Array.isArray(candidate?.decoded_texts) ? candidate.decoded_texts : []
+  const firstText = decodedTexts.find((text) => String(text || '').trim())
+  return firstText ? String(firstText).trim() : ''
+}
+
+const normalizeRoiCandidate = (candidate, index = 0) => {
+  const decodedText = extractRoiDecodedText(candidate)
+  return {
+    ...candidate,
+    candidate_id: candidate?.candidate_id || `roi-${index + 1}`,
+    decoded_text: decodedText,
+    score: Number(candidate?.score || 0),
+    confidence: candidate?.confidence == null ? null : Number(candidate.confidence)
+  }
+}
+
+const buildLocationFromRoiCandidate = (candidate) => {
+  const points = normalizeCapturePoints(candidate?.points || candidate?.detection?.points)
+  const imageWidth = Number(candidate?.image_width || candidate?.imageWidth || candidate?.frameWidth || candidate?.source_width || 0)
+  const imageHeight = Number(candidate?.image_height || candidate?.imageHeight || candidate?.frameHeight || candidate?.source_height || 0)
+  if (!points.length || !imageWidth || !imageHeight) return null
+
+  return {
+    source: 'roi-assist',
+    points,
+    imageWidth,
+    imageHeight
+  }
+}
+
+const collectSuccessfulRoiCandidates = (payload) => {
+  const rawCandidates = Array.isArray(payload?.candidates) ? payload.candidates : []
+  const normalized = rawCandidates
+    .map((candidate, index) => normalizeRoiCandidate(candidate, index))
+    .filter((candidate) => candidate.success && candidate.decoded_text)
+
+  if (!normalized.length && Array.isArray(payload?.decoded_texts)) {
+    return payload.decoded_texts
+      .map((text, index) => normalizeRoiCandidate({
+        candidate_id: `roi-fallback-${index + 1}`,
+        decoded_text: text,
+        decoded_texts: [text],
+        decoded_types: payload.decoded_types || [],
+        class_name: payload.method || 'ROI',
+        source: payload.method || 'roi_assist',
+        success: true,
+        score: index === 0 ? 0.6 : 0.5
+      }, index))
+      .filter((candidate) => candidate.decoded_text)
+  }
+
+  const deduped = []
+  const seen = new Set()
+  normalized
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .forEach((candidate) => {
+      if (seen.has(candidate.decoded_text)) return
+      seen.add(candidate.decoded_text)
+      deduped.push(candidate)
+    })
+
+  return deduped
+}
+
+const resolveRoiCandidateType = (candidate) => {
+  const text = String(candidate?.decoded_text || '').trim()
+  try {
+    const parsed = JSON.parse(text)
+    if (parsed?.type) return String(parsed.type).replaceAll('_', ' ')
+    if (parsed?.lot_number) return 'LOT'
+    if (parsed?.bin || parsed?.bin_code) return 'BIN'
+    if (parsed?.sku || parsed?.id) return 'ITEM'
+  } catch (_error) {
+    // Plain barcodes are expected; JSON labels are only one supported format.
+  }
+
+  if (/^LOT-/i.test(text)) return 'LOT'
+  if (/^\d{8,14}$/.test(text)) return 'ITEM'
+
+  const className = String(candidate?.class_name || '').toLowerCase()
+  if (className.includes('qr')) return 'QR'
+  if (className.includes('bar')) return 'BARCODE'
+  return 'CODE'
+}
+
+const formatRoiCandidateMeta = (candidate) => {
+  const pieces = []
+  const className = candidate?.class_name ? String(candidate.class_name).replaceAll('_', ' ') : ''
+  if (className) pieces.push(className)
+  if (Number.isFinite(candidate?.confidence)) {
+    pieces.push(`${Math.round(candidate.confidence * 100)}% detect`)
+  }
+  if (Number.isFinite(candidate?.score)) {
+    pieces.push(`${Math.round(candidate.score * 100)} score`)
+  }
+  if (candidate?.best_preprocessing_mode) {
+    pieces.push(candidate.best_preprocessing_mode)
+  }
+  return pieces.join(' · ') || 'ROI Assist candidate'
+}
+
+const dismissMultiCodePicker = () => {
+  showMultiCodePicker.value = false
+  roiAssistCandidates.value = []
+  setRoiAssistStatus('Selection cancelled. Keep scanning when ready.', { autoClearMs: 1800 })
+  resetRoiAssistAutoTimer()
+  resumeOutboundLiveDecoding()
+}
+
+const selectRoiCandidate = async (candidate) => {
+  const decodedText = extractRoiDecodedText(candidate)
+  if (!decodedText) return
+
+  const captureLocation = buildLocationFromRoiCandidate(candidate)
+  showMultiCodePicker.value = false
+  roiAssistCandidates.value = []
+  setRoiAssistStatus('Target label selected.', { autoClearMs: 1400 })
+  await handleScanResult(decodedText, {
+    bypassCooldown: true,
+    sourceMode: 'roi-assist',
+    captureLocation
+  })
+}
+
+const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
+  const candidates = collectSuccessfulRoiCandidates(payload)
+
+  if (candidates.length > 1) {
+    roiAssistCandidates.value = candidates
+    showMultiCodePicker.value = true
+    showScanCapturePulse('Labels found', buildLocationFromRoiCandidate(candidates[0]))
+    setRoiAssistStatus(`${candidates.length} labels found. Choose the target label.`, { autoClearMs: 2400 })
+    stopScanLoop()
+    if (videoRef.value && !videoRef.value.paused) {
+      videoRef.value.pause()
+    }
+    return
+  }
+
+  if (candidates.length === 1) {
+    const candidate = candidates[0]
+    const captureLocation = buildLocationFromRoiCandidate(candidate)
+    setRoiAssistStatus(
+      trigger === 'auto' ? 'Enhanced scan found a label.' : 'ROI Assist found a label.',
+      { autoClearMs: 1800 }
+    )
+    await handleScanResult(candidate.decoded_text, {
+      bypassCooldown: true,
+      sourceMode: 'roi-assist',
+      captureLocation
+    })
+    return
+  }
+
+  setRoiAssistStatus('Move closer or hold steady.', { autoClearMs: 2200 })
+}
+
+const triggerRoiAssist = async (trigger = 'manual') => {
+  if (isRoiAssistRunning.value || !isScanning.value || !videoRef.value) return
+  if (showMultiCodePicker.value || scanResult.value || hasInteractiveModalOpen.value) return
+
+  isRoiAssistRunning.value = true
+  lastRoiAssistAt = Date.now()
+  setRoiAssistStatus(trigger === 'auto' ? 'Trying enhanced scan...' : 'Running ROI Assist...')
+
+  try {
+    const frameBlob = await captureVideoFrameAsJpeg(videoRef.value)
+    if (!isScanning.value || scanResult.value || showMultiCodePicker.value) return
+
+    const formData = new FormData()
+    formData.append('frame', frameBlob, 'scanner-frame.jpg')
+    formData.append('mode', 'obb')
+    formData.append('trigger', trigger)
+    formData.append('operation_context', scanAction.value || 'scan')
+
+    const startedAt = performance.now()
+    const response = await fetchWithTimeout('/api/scanner/roi-assist', {
+      method: 'POST',
+      body: formData
+    })
+    const payload = await response.json().catch(() => null)
+
+    console.log('[ROI Assist] finished', {
+      trigger,
+      ok: response.ok,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      serverMs: payload?.processing_time_ms,
+      candidates: payload?.candidates?.length || 0,
+      success: payload?.success
+    })
+
+    if (!response.ok || !payload) {
+      throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`)
+    }
+
+    await handleRoiAssistPayload(payload, trigger)
+  } catch (error) {
+    console.warn('[ROI Assist] failed', error)
+    if (trigger === 'manual') {
+      setRoiAssistStatus(`ROI Assist failed: ${error?.message || 'unknown error'}`, { autoClearMs: 2600 })
+    } else {
+      setRoiAssistStatus('', { autoClearMs: 0 })
+    }
+  } finally {
+    isRoiAssistRunning.value = false
+    resetRoiAssistAutoTimer()
+  }
+}
+
+const maybeTriggerAutoRoiAssist = (video) => {
+  if (!isScanning.value || isRoiAssistRunning.value || !video) return
+  if (scanResult.value || showMultiCodePicker.value || shouldSuspendLiveScanner.value) return
+  if (Date.now() < roiAssistEligibleAt) return
+  if (Date.now() - lastRoiAssistAt < ROI_ASSIST_COOLDOWN_MS) return
+  if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
+
+  void triggerRoiAssist('auto')
 }
 
 const shouldDisableBarcodeDetectorOnPlatform = () => {
@@ -1574,7 +2097,8 @@ const handleScannerWorkerMessage = (event) => {
       fillRatio: payload.fillRatio
     })
     void handleScanResult(payload.decodedText, {
-      sourceMode: 'camera'
+      sourceMode: 'camera',
+      captureLocation: payload.location || null
     })
     return
   }
@@ -1806,6 +2330,8 @@ onBeforeUnmount(() => {
   if (operationNoticeTimer) {
     clearTimeout(operationNoticeTimer)
   }
+  hideScanCapturePulse()
+  clearRoiAssistStatusTimer()
   releaseWarmCameraStream()
 })
 
@@ -2185,10 +2711,12 @@ const startScanning = async () => {
     void primeAudioFeedback()
     isScanning.value = true
     isVideoFrameReady.value = false
+    hideScanCapturePulse()
     decodeMissStreak = 0
     cachedFrameMetrics = null
     lastFrameMetricsAt = 0
     resetScannerWorkerState()
+    resetRoiAssistAutoTimer()
     beginBenchmarkSession('camera')
     statusMessage.value = 'Starting camera...'
     statusType.value = 'info'
@@ -2284,10 +2812,12 @@ const startScanning = async () => {
 const stopScanning = async ({ forceRelease = false } = {}) => {
   isScanning.value = false
   isVideoFrameReady.value = false
+  hideScanCapturePulse()
   decodeMissStreak = 0
   cachedFrameMetrics = null
   lastFrameMetricsAt = 0
   resetScannerWorkerState()
+  resetRoiAssistAutoTimer()
   clearVideoReadyTimer()
   clearDeferredTrackConstraintsTimer()
   stopScanLoop()
@@ -2531,7 +3061,7 @@ const handleManualSubmit = () => {
 
 // 处理扫描结果
 const handleScanResult = async (rawData, options = {}) => {
-  const { bypassCooldown = false, silent = false } = options
+  const { bypassCooldown = false, silent = false, captureLocation = null } = options
   const normalizedRaw = String(rawData || '').trim()
 
   if (!normalizedRaw) return
@@ -2541,6 +3071,9 @@ const handleScanResult = async (rawData, options = {}) => {
   isHandlingScan.value = true
   lastProcessedScan.value = normalizedRaw
   lastProcessedAt.value = Date.now()
+  if (!silent) {
+    showScanCapturePulse('Code captured', captureLocation)
+  }
 
   try {
     statusMessage.value = 'Processing scan...'
@@ -2569,6 +3102,15 @@ const handleScanResult = async (rawData, options = {}) => {
 
     if (!response.ok) {
       const backendMessage = result?.message || result?.error || `HTTP ${response.status}`
+      if (isAuthFailure(response.status, backendMessage)) {
+        handleAuthFailure(backendMessage)
+        finalizeBenchmarkSession({
+          status: 'auth_failed',
+          labelType: 'UNRESOLVED',
+          rawData: normalizedRaw
+        })
+        return
+      }
       throw new Error(backendMessage)
     }
 
@@ -2577,6 +3119,9 @@ const handleScanResult = async (rawData, options = {}) => {
     }
     
     if (result.success) {
+      showMultiCodePicker.value = false
+      roiAssistCandidates.value = []
+      setRoiAssistStatus('', { autoClearMs: 0 })
       ensureBenchmarkSession(options.sourceMode || currentMode.value)
       scanResult.value = {
         raw: normalizedRaw,
@@ -3016,6 +3561,10 @@ const clearResult = () => {
   selectedOutboundLotKey.value = ''
   outboundStrategy.value = 'DIRECT'
   outboundSelectionMode.value = 'AUTO'
+  showMultiCodePicker.value = false
+  roiAssistCandidates.value = []
+  hideScanCapturePulse()
+  setRoiAssistStatus('', { autoClearMs: 0 })
   actionFeedbackModal.value.visible = false
   if (operationNoticeTimer) {
     clearTimeout(operationNoticeTimer)
@@ -3203,6 +3752,197 @@ const playActionSuccessSound = () => {
   width: 250px;
   height: 250px;
   border: 2px solid rgba(255, 255, 255, 0.8);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.scan-frame-locked {
+  border-color: rgba(134, 239, 172, 0.96);
+  background:
+    radial-gradient(circle at center, rgba(16, 185, 129, 0.22) 0%, rgba(16, 185, 129, 0.1) 42%, rgba(16, 185, 129, 0) 72%);
+  box-shadow:
+    0 0 0 999px rgba(16, 185, 129, 0.08),
+    0 0 34px rgba(16, 185, 129, 0.46),
+    inset 0 0 28px rgba(16, 185, 129, 0.18);
+}
+
+.scan-frame-locked .corner {
+  border-color: #86efac;
+  filter: drop-shadow(0 0 12px rgba(134, 239, 172, 0.86));
+}
+
+.scan-capture-pulse {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 15px;
+  border-radius: 999px;
+  border: 1px solid rgba(187, 247, 208, 0.72);
+  background: rgba(5, 150, 105, 0.78);
+  color: #ffffff;
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  box-shadow:
+    0 18px 40px rgba(16, 185, 129, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.26);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  animation: scanCapturePop 0.92s cubic-bezier(0.2, 0.9, 0.22, 1) both;
+}
+
+.scan-capture-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #bbf7d0;
+  box-shadow: 0 0 0 0 rgba(187, 247, 208, 0.72);
+  animation: scanCaptureDot 0.92s ease-out infinite;
+}
+
+.scan-code-lock {
+  position: absolute;
+  border: 2px solid rgba(134, 239, 172, 0.92);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.22), rgba(16, 185, 129, 0.08) 52%, rgba(16, 185, 129, 0.01) 100%);
+  box-shadow:
+    0 0 0 999px rgba(16, 185, 129, 0.04),
+    0 16px 40px rgba(16, 185, 129, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(2px) saturate(125%);
+  -webkit-backdrop-filter: blur(2px) saturate(125%);
+  animation: scanCodeLockPop 0.92s cubic-bezier(0.2, 0.9, 0.22, 1) both;
+}
+
+.scan-code-lock-corner {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 4px solid #34d399;
+  filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.8));
+}
+
+.scan-code-lock-top-left {
+  top: -5px;
+  left: -5px;
+  border-right: none;
+  border-bottom: none;
+  border-top-left-radius: 14px;
+}
+
+.scan-code-lock-top-right {
+  top: -5px;
+  right: -5px;
+  border-left: none;
+  border-bottom: none;
+  border-top-right-radius: 14px;
+}
+
+.scan-code-lock-bottom-left {
+  bottom: -5px;
+  left: -5px;
+  border-right: none;
+  border-top: none;
+  border-bottom-left-radius: 14px;
+}
+
+.scan-code-lock-bottom-right {
+  right: -5px;
+  bottom: -5px;
+  border-left: none;
+  border-top: none;
+  border-bottom-right-radius: 14px;
+}
+
+.scan-code-lock-dot {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 18px;
+  height: 18px;
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow:
+    0 0 0 0 rgba(34, 197, 94, 0.74),
+    0 10px 20px rgba(4, 120, 87, 0.26);
+  animation: scanCaptureDot 0.92s ease-out infinite;
+}
+
+.scan-code-lock-label {
+  position: absolute;
+  left: 50%;
+  bottom: -42px;
+  transform: translateX(-50%);
+  padding: 7px 12px;
+  border: 1px solid rgba(187, 247, 208, 0.68);
+  border-radius: 999px;
+  background: rgba(6, 95, 70, 0.78);
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  box-shadow:
+    0 14px 28px rgba(4, 120, 87, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+}
+
+@keyframes scanCapturePop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.84);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.04);
+  }
+  72% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+}
+
+@keyframes scanCaptureDot {
+  0% {
+    box-shadow: 0 0 0 0 rgba(187, 247, 208, 0.72);
+  }
+  72% {
+    box-shadow: 0 0 0 13px rgba(187, 247, 208, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(187, 247, 208, 0);
+  }
+}
+
+@keyframes scanCodeLockPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1.025);
+  }
+  72% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.98);
+  }
 }
 
 .corner {
@@ -3694,6 +4434,140 @@ const playActionSuccessSound = () => {
   color: #1d4ed8;
 }
 
+.roi-assist-status {
+  margin: 12px auto 0;
+  width: min(92%, 520px);
+  padding: 12px 16px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(241, 245, 249, 0.72) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #334155;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+}
+
+.roi-assist-btn {
+  border-color: rgba(59, 130, 246, 0.24);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(219, 234, 254, 0.88));
+  color: #1d4ed8;
+}
+
+.roi-assist-btn:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.multi-code-card {
+  margin: 0 0 20px;
+  padding: 20px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.9), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(248, 250, 252, 0.76));
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow:
+    0 24px 60px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(26px) saturate(135%);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
+}
+
+.multi-code-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.multi-code-eyebrow {
+  display: inline-flex;
+  margin-bottom: 7px;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.multi-code-header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.28rem;
+  letter-spacing: -0.03em;
+}
+
+.multi-code-header p {
+  margin: 6px 0 0;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.multi-code-close {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.68);
+  color: #64748b;
+  font-size: 1.4rem;
+  cursor: pointer;
+}
+
+.multi-code-list {
+  display: grid;
+  gap: 10px;
+}
+
+.multi-code-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.multi-code-option:hover {
+  border-color: rgba(59, 130, 246, 0.36);
+  background: rgba(239, 246, 255, 0.86);
+}
+
+.multi-code-type {
+  grid-row: span 2;
+  align-self: center;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #ffffff;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.multi-code-main {
+  font-size: 1rem;
+  font-weight: 800;
+  word-break: break-all;
+}
+
+.multi-code-meta {
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
 .action-btn {
   padding: 12px 24px;
   border: 1px solid rgba(203, 213, 225, 0.95);
@@ -3967,6 +4841,23 @@ const playActionSuccessSound = () => {
 
   .camera-controls {
     flex-wrap: wrap;
+  }
+
+  .multi-code-card {
+    padding: 18px;
+  }
+
+  .multi-code-header {
+    align-items: flex-start;
+  }
+
+  .multi-code-option {
+    grid-template-columns: 1fr;
+  }
+
+  .multi-code-type {
+    grid-row: auto;
+    justify-self: flex-start;
   }
 
   .inquiry-grid {

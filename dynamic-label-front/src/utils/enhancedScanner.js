@@ -221,6 +221,75 @@ const buildSquareRoi = (video) => {
   }
 }
 
+const buildCandidateSource = (crop, candidateWidth, candidateHeight, frameWidth, frameHeight, rotationDegrees = 0) => ({
+  cropX: crop.x,
+  cropY: crop.y,
+  cropWidth: crop.width,
+  cropHeight: crop.height,
+  candidateWidth,
+  candidateHeight,
+  frameWidth,
+  frameHeight,
+  rotationDegrees
+})
+
+const rotatePointAroundCenter = (point, width, height, degrees) => {
+  if (!degrees) return point
+
+  const radians = (degrees * Math.PI) / 180
+  const centerX = width / 2
+  const centerY = height / 2
+  const dx = point.x - centerX
+  const dy = point.y - centerY
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+
+  return {
+    x: centerX + (dx * cos) - (dy * sin),
+    y: centerY + (dx * sin) + (dy * cos)
+  }
+}
+
+const normalizeResultPoints = (points) => {
+  if (!Array.isArray(points)) return []
+
+  return points
+    .map((point) => {
+      const x = Number(point?.getX?.() ?? point?.x ?? point?.[0])
+      const y = Number(point?.getY?.() ?? point?.y ?? point?.[1])
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+      return { x, y }
+    })
+    .filter(Boolean)
+}
+
+const buildFrameLocation = (candidate, points) => {
+  const source = candidate?.source
+  if (!source || !Array.isArray(points) || !points.length) return null
+
+  const framePoints = points.map((point) => {
+    const unrotated = rotatePointAroundCenter(
+      point,
+      source.candidateWidth,
+      source.candidateHeight,
+      -(source.rotationDegrees || 0)
+    )
+
+    return {
+      x: source.cropX + ((unrotated.x / source.candidateWidth) * source.cropWidth),
+      y: source.cropY + ((unrotated.y / source.candidateHeight) * source.cropHeight)
+    }
+  })
+
+  return {
+    source: 'local-scanner',
+    points: framePoints,
+    frameWidth: source.frameWidth,
+    frameHeight: source.frameHeight,
+    candidateLabel: candidate.label
+  }
+}
+
 const enhanceLowLight = (sourceCanvas, targetCanvas, metrics) => {
   const sourceCtx = getContext(sourceCanvas)
   const targetCtx = getContext(targetCanvas)
@@ -316,6 +385,8 @@ const applyBlockThreshold = (sourceCanvas, targetCanvas, metrics) => {
 export const buildDecodeCandidatesFromVideo = (video, cache, metrics, options = {}) => {
   const roi = buildCenteredRoi(video)
   const squareRoi = buildSquareRoi(video)
+  const frameWidth = video.videoWidth || 1280
+  const frameHeight = video.videoHeight || 720
   const includeFullFrame = options.includeFullFrame === true
   const enableTiltAssist = options.enableTiltAssist !== false
   const includeEnhancedAssist = options.includeEnhancedAssist !== false
@@ -325,51 +396,65 @@ export const buildDecodeCandidatesFromVideo = (video, cache, metrics, options = 
 
   const roiCanvas = ensureCanvas(cache, 'roiCanvas', targetWidth, targetHeight)
   drawCrop(video, roiCanvas, roi)
+  const roiSource = buildCandidateSource(roi, targetWidth, targetHeight, frameWidth, frameHeight)
 
   const candidates = [
-    { label: 'roi-base', canvas: roiCanvas }
+    { label: 'roi-base', canvas: roiCanvas, source: roiSource }
   ]
 
   if (enableTiltAssist) {
     [-14, -8, 8, 14].forEach((angle) => {
       const rotatedCanvas = ensureCanvas(cache, `roiTilt${angle}`, targetWidth, targetHeight)
       rotateCanvasInto(roiCanvas, rotatedCanvas, angle)
-      candidates.push({ label: `roi-tilt-${angle}`, canvas: rotatedCanvas })
+      candidates.push({
+        label: `roi-tilt-${angle}`,
+        canvas: rotatedCanvas,
+        source: buildCandidateSource(roi, targetWidth, targetHeight, frameWidth, frameHeight, angle)
+      })
     })
   }
 
   if (includeEnhancedAssist) {
     const enhancedCanvas = ensureCanvas(cache, 'enhancedCanvas', targetWidth, targetHeight)
     enhanceLowLight(roiCanvas, enhancedCanvas, metrics)
-    candidates.push({ label: 'roi-enhanced', canvas: enhancedCanvas })
+    candidates.push({ label: 'roi-enhanced', canvas: enhancedCanvas, source: roiSource })
   }
 
   if (includeBinaryAssist) {
     const binaryCanvas = ensureCanvas(cache, 'binaryCanvas', targetWidth, targetHeight)
     applyBlockThreshold(roiCanvas, binaryCanvas, metrics)
-    candidates.push({ label: 'roi-binary', canvas: binaryCanvas })
+    candidates.push({ label: 'roi-binary', canvas: binaryCanvas, source: roiSource })
   }
 
   const squareSize = clamp(Math.round(squareRoi.width), 360, 720)
   const squareCanvas = ensureCanvas(cache, 'squareCanvas', squareSize, squareSize)
   drawCrop(video, squareCanvas, squareRoi)
-  candidates.push({ label: 'center-square', canvas: squareCanvas })
+  const squareSource = buildCandidateSource(squareRoi, squareSize, squareSize, frameWidth, frameHeight)
+  candidates.push({ label: 'center-square', canvas: squareCanvas, source: squareSource })
 
   if (enableTiltAssist) {
     [-10, 10].forEach((angle) => {
       const rotatedSquareCanvas = ensureCanvas(cache, `squareTilt${angle}`, squareSize, squareSize)
       rotateCanvasInto(squareCanvas, rotatedSquareCanvas, angle)
-      candidates.push({ label: `square-tilt-${angle}`, canvas: rotatedSquareCanvas })
+      candidates.push({
+        label: `square-tilt-${angle}`,
+        canvas: rotatedSquareCanvas,
+        source: buildCandidateSource(squareRoi, squareSize, squareSize, frameWidth, frameHeight, angle)
+      })
     })
   }
 
   if (includeFullFrame) {
-    const fullWidth = clamp(video.videoWidth || 1280, 640, 1280)
-    const fullHeight = clamp(video.videoHeight || 720, 360, 720)
+    const fullWidth = clamp(frameWidth, 640, 1280)
+    const fullHeight = clamp(frameHeight, 360, 720)
     const fullCanvas = ensureCanvas(cache, 'fullCanvas', fullWidth, fullHeight)
     const ctx = getContext(fullCanvas)
     ctx.drawImage(video, 0, 0, fullCanvas.width, fullCanvas.height)
-    candidates.push({ label: 'full-frame', canvas: fullCanvas })
+    candidates.push({
+      label: 'full-frame',
+      canvas: fullCanvas,
+      source: buildCandidateSource({ x: 0, y: 0, width: frameWidth, height: frameHeight }, fullWidth, fullHeight, frameWidth, frameHeight)
+    })
   }
 
   return candidates
@@ -380,12 +465,12 @@ export const decodeFromCandidates = (reader, candidates) => {
     try {
       const result = reader.decodeFromCanvas(candidate.canvas)
       if (result?.getText?.()) {
-        const points = result.getResultPoints?.() || []
+        const points = normalizeResultPoints(result.getResultPoints?.() || [])
         let fillRatio = null
 
         if (points.length > 0) {
-          const xs = points.map((point) => Number(point?.getX?.() ?? point?.x ?? 0))
-          const ys = points.map((point) => Number(point?.getY?.() ?? point?.y ?? 0))
+          const xs = points.map((point) => point.x)
+          const ys = points.map((point) => point.y)
           const minX = Math.min(...xs)
           const maxX = Math.max(...xs)
           const minY = Math.min(...ys)
@@ -403,7 +488,8 @@ export const decodeFromCandidates = (reader, candidates) => {
           text: result.getText(),
           label: candidate.label,
           format: normalizeBarcodeFormat(result.getBarcodeFormat?.()),
-          fillRatio
+          fillRatio,
+          location: buildFrameLocation(candidate, points)
         }
       }
     } catch (error) {
