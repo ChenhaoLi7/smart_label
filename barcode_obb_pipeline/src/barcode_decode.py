@@ -124,8 +124,9 @@ def decode_image_with_opencv(image) -> dict:
                     decoded_types = result[2]
                     for text in _iter_values(decoded_info):
                         _append_text(text, texts)
-                    for decoded_type in _iter_values(decoded_types):
-                        _append_type(decoded_type, types)
+                    if any(str(text).strip() for text in texts):
+                        for decoded_type in _iter_values(decoded_types):
+                            _append_type(decoded_type, types)
         else:
             errors.append("opencv barcode module unavailable")
     except Exception as error:

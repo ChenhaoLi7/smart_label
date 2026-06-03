@@ -42,30 +42,16 @@
           
           <!-- 扫描框 -->
           <div class="scan-overlay">
-            <div :class="['scan-frame', { 'scan-frame-locked': scanCapturePulse && !hasPositionedScanCapture }]">
+            <div ref="scanFrameRef" :class="['scan-frame', { 'scan-frame-locked': scanCapturePulse }]">
               <div class="corner top-left"></div>
               <div class="corner top-right"></div>
               <div class="corner bottom-left"></div>
               <div class="corner bottom-right"></div>
-              <div v-if="scanCapturePulse && !hasPositionedScanCapture" class="scan-capture-pulse" aria-live="polite">
-                <span class="scan-capture-dot"></span>
-                <span>{{ scanCaptureMessage }}</span>
-              </div>
             </div>
-            <div
-              v-if="scanCapturePulse && hasPositionedScanCapture"
-              class="scan-code-lock"
-              :style="scanCaptureOverlayStyle"
-              aria-live="polite"
-            >
-              <span class="scan-code-lock-corner scan-code-lock-top-left"></span>
-              <span class="scan-code-lock-corner scan-code-lock-top-right"></span>
-              <span class="scan-code-lock-corner scan-code-lock-bottom-left"></span>
-              <span class="scan-code-lock-corner scan-code-lock-bottom-right"></span>
-              <span class="scan-code-lock-dot"></span>
-              <span class="scan-code-lock-label">{{ scanCaptureMessage }}</span>
-            </div>
-            <p class="scan-hint">Please place the barcode inside the frame</p>
+            <p :class="['scan-hint', { 'scan-hint-captured': scanCapturePulse }]" aria-live="polite">
+              <span v-if="scanCapturePulse" class="scan-hint-dot"></span>
+              <span>{{ scanCapturePulse ? scanCaptureMessage : 'Please place the barcode inside the frame' }}</span>
+            </p>
           </div>
         </div>
 
@@ -141,8 +127,15 @@
           @click="selectRoiCandidate(candidate)"
         >
           <span class="multi-code-type">{{ resolveRoiCandidateType(candidate) }}</span>
-          <span class="multi-code-main">{{ candidate.decoded_text }}</span>
+          <span class="multi-code-main">{{ formatRoiCandidateTitle(candidate) }}</span>
+          <span class="multi-code-subtitle">{{ formatRoiCandidateSubtitle(candidate) }}</span>
+          <span v-if="shouldShowRoiCandidateRaw(candidate)" class="multi-code-raw">
+            {{ formatRoiCandidateRaw(candidate) }}
+          </span>
           <span class="multi-code-meta">{{ formatRoiCandidateMeta(candidate) }}</span>
+          <span v-if="formatRoiCandidatePrimary(candidate)" class="multi-code-primary">
+            {{ formatRoiCandidatePrimary(candidate) }}
+          </span>
         </button>
       </div>
     </div>
@@ -579,6 +572,7 @@ const isHandheldClient = () => {
 
 // 响应式数据
 const videoRef = ref(null)
+const scanFrameRef = ref(null)
 const fileInput = ref(null)
 const isScanning = ref(false)
 const currentMode = ref('camera')
@@ -589,7 +583,6 @@ const statusType = ref('info')
 const isVideoFrameReady = ref(false)
 const scanCapturePulse = ref(false)
 const scanCaptureMessage = ref('Code captured')
-const scanCaptureLocation = ref(null)
 const manualCode = ref('')
 const devices = ref([])
 const selectedDevice = ref(localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || '')
@@ -628,102 +621,6 @@ const showMultiCodePicker = ref(false)
 let sharedAudioContext = null
 let removeAudioPrimeListeners = null
 let scanCapturePulseTimer = null
-
-const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max)
-
-const normalizeCapturePoint = (point) => {
-  if (!point || typeof point !== 'object') return null
-  const x = Number(point.x ?? point[0])
-  const y = Number(point.y ?? point[1])
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
-  return { x, y }
-}
-
-const normalizeCapturePoints = (points) => {
-  if (!Array.isArray(points)) return []
-  return points
-    .map(normalizeCapturePoint)
-    .filter(Boolean)
-}
-
-const getScanCaptureBounds = (location) => {
-  const points = normalizeCapturePoints(location?.points)
-  if (!points.length) return null
-
-  const xs = points.map((point) => point.x)
-  const ys = points.map((point) => point.y)
-  let minX = Math.min(...xs)
-  let maxX = Math.max(...xs)
-  let minY = Math.min(...ys)
-  let maxY = Math.max(...ys)
-
-  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null
-  if (maxX - minX <= 0 && maxY - minY <= 0) return null
-
-  const sourceWidth = Number(location?.imageWidth || location?.frameWidth || 0)
-  const sourceHeight = Number(location?.imageHeight || location?.frameHeight || 0)
-  const minSourceWidth = sourceWidth ? sourceWidth * 0.035 : 18
-  const minSourceHeight = sourceHeight ? sourceHeight * 0.035 : 18
-  const currentWidth = maxX - minX
-  const currentHeight = maxY - minY
-
-  if (currentWidth < minSourceWidth) {
-    const expand = (minSourceWidth - currentWidth) / 2
-    minX -= expand
-    maxX += expand
-  }
-
-  if (currentHeight < minSourceHeight) {
-    const expand = (minSourceHeight - currentHeight) / 2
-    minY -= expand
-    maxY += expand
-  }
-
-  return { minX, maxX, minY, maxY }
-}
-
-const scanCaptureOverlayStyle = computed(() => {
-  const location = scanCaptureLocation.value
-  const bounds = getScanCaptureBounds(location)
-  const video = videoRef.value
-  const stage = video?.parentElement
-  if (!bounds || !video || !stage) return null
-
-  const stageRect = stage.getBoundingClientRect()
-  if (!stageRect.width || !stageRect.height) return null
-
-  const sourceWidth = Number(location?.imageWidth || location?.frameWidth || video.videoWidth || 0)
-  const sourceHeight = Number(location?.imageHeight || location?.frameHeight || video.videoHeight || 0)
-  if (!sourceWidth || !sourceHeight) return null
-
-  // The video uses object-fit: cover, so source pixels must be mapped through the cover crop.
-  const coverScale = Math.max(stageRect.width / sourceWidth, stageRect.height / sourceHeight)
-  const renderedWidth = sourceWidth * coverScale
-  const renderedHeight = sourceHeight * coverScale
-  const offsetX = (stageRect.width - renderedWidth) / 2
-  const offsetY = (stageRect.height - renderedHeight) / 2
-
-  let left = offsetX + (bounds.minX * coverScale)
-  let top = offsetY + (bounds.minY * coverScale)
-  let width = Math.max((bounds.maxX - bounds.minX) * coverScale, 44)
-  let height = Math.max((bounds.maxY - bounds.minY) * coverScale, 44)
-
-  const centerX = left + (width / 2)
-  const centerY = top + (height / 2)
-  width = Math.min(width, stageRect.width - 8)
-  height = Math.min(height, stageRect.height - 8)
-  left = clampNumber(centerX - (width / 2), 4, Math.max(stageRect.width - width - 4, 4))
-  top = clampNumber(centerY - (height / 2), 4, Math.max(stageRect.height - height - 4, 4))
-
-  return {
-    left: `${left}px`,
-    top: `${top}px`,
-    width: `${width}px`,
-    height: `${height}px`
-  }
-})
-
-const hasPositionedScanCapture = computed(() => Boolean(scanCaptureOverlayStyle.value))
 
 // 新建商品相关状态
 const showCreateItemModal = ref(false)
@@ -941,12 +838,10 @@ const clearScanCapturePulseTimer = () => {
 const hideScanCapturePulse = () => {
   clearScanCapturePulseTimer()
   scanCapturePulse.value = false
-  scanCaptureLocation.value = null
 }
 
-const showScanCapturePulse = (message = 'Code captured', location = null) => {
+const showScanCapturePulse = (message = 'Code captured') => {
   scanCaptureMessage.value = message
-  scanCaptureLocation.value = location
   scanCapturePulse.value = false
   clearScanCapturePulseTimer()
 
@@ -1704,8 +1599,7 @@ const runEnhancedScanLoop = () => {
   if (!decoded?.text) return
 
   void handleScanResult(decoded.text, {
-    sourceMode: 'camera',
-    captureLocation: decoded.location || null
+    sourceMode: 'camera'
   })
 }
 
@@ -1812,6 +1706,44 @@ const captureVideoFrameAsJpeg = (video, {
   }, 'image/jpeg', quality)
 })
 
+const getNormalizedScanFrame = () => {
+  const video = videoRef.value
+  const frame = scanFrameRef.value
+  if (!video || !frame || !video.videoWidth || !video.videoHeight) return null
+
+  const videoRect = video.getBoundingClientRect()
+  const frameRect = frame.getBoundingClientRect()
+  if (!videoRect.width || !videoRect.height || !frameRect.width || !frameRect.height) return null
+
+  const sourceWidth = video.videoWidth
+  const sourceHeight = video.videoHeight
+  const coverScale = Math.max(videoRect.width / sourceWidth, videoRect.height / sourceHeight)
+  const renderedWidth = sourceWidth * coverScale
+  const renderedHeight = sourceHeight * coverScale
+  const renderedLeft = videoRect.left + ((videoRect.width - renderedWidth) / 2)
+  const renderedTop = videoRect.top + ((videoRect.height - renderedHeight) / 2)
+
+  const sourceLeft = (frameRect.left - renderedLeft) / coverScale
+  const sourceTop = (frameRect.top - renderedTop) / coverScale
+  const sourceRight = (frameRect.right - renderedLeft) / coverScale
+  const sourceBottom = (frameRect.bottom - renderedTop) / coverScale
+
+  const left = Math.max(0, Math.min(sourceWidth, sourceLeft))
+  const top = Math.max(0, Math.min(sourceHeight, sourceTop))
+  const right = Math.max(0, Math.min(sourceWidth, sourceRight))
+  const bottom = Math.max(0, Math.min(sourceHeight, sourceBottom))
+  const width = Math.max(1, right - left)
+  const height = Math.max(1, bottom - top)
+
+  return {
+    x: Number((left / sourceWidth).toFixed(5)),
+    y: Number((top / sourceHeight).toFixed(5)),
+    width: Number((width / sourceWidth).toFixed(5)),
+    height: Number((height / sourceHeight).toFixed(5)),
+    reference: 'scan_frame'
+  }
+}
+
 const fetchWithTimeout = async (url, options = {}, timeoutMs = ROI_ASSIST_TIMEOUT_MS) => {
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     return fetch(url, {
@@ -1849,20 +1781,6 @@ const normalizeRoiCandidate = (candidate, index = 0) => {
     decoded_text: decodedText,
     score: Number(candidate?.score || 0),
     confidence: candidate?.confidence == null ? null : Number(candidate.confidence)
-  }
-}
-
-const buildLocationFromRoiCandidate = (candidate) => {
-  const points = normalizeCapturePoints(candidate?.points || candidate?.detection?.points)
-  const imageWidth = Number(candidate?.image_width || candidate?.imageWidth || candidate?.frameWidth || candidate?.source_width || 0)
-  const imageHeight = Number(candidate?.image_height || candidate?.imageHeight || candidate?.frameHeight || candidate?.source_height || 0)
-  if (!points.length || !imageWidth || !imageHeight) return null
-
-  return {
-    source: 'roi-assist',
-    points,
-    imageWidth,
-    imageHeight
   }
 }
 
@@ -1922,8 +1840,9 @@ const resolveRoiCandidateType = (candidate) => {
 }
 
 const formatRoiCandidateMeta = (candidate) => {
+  const display = candidate?.display || {}
   const pieces = []
-  const className = candidate?.class_name ? String(candidate.class_name).replaceAll('_', ' ') : ''
+  const className = display.entityType || (candidate?.class_name ? String(candidate.class_name).replaceAll('_', ' ') : '')
   if (className) pieces.push(className)
   if (Number.isFinite(candidate?.confidence)) {
     pieces.push(`${Math.round(candidate.confidence * 100)}% detect`)
@@ -1931,10 +1850,108 @@ const formatRoiCandidateMeta = (candidate) => {
   if (Number.isFinite(candidate?.score)) {
     pieces.push(`${Math.round(candidate.score * 100)} score`)
   }
+  if (Number.isFinite(candidate?.center_distance_ratio)) {
+    const centerScore = Math.max(0, Math.min(1, 1 - candidate.center_distance_ratio))
+    pieces.push(`${Math.round(centerScore * 100)}% centered`)
+  }
   if (candidate?.best_preprocessing_mode) {
     pieces.push(candidate.best_preprocessing_mode)
   }
   return pieces.join(' · ') || 'ROI Assist candidate'
+}
+
+const formatRoiCandidateTitle = (candidate) => {
+  const displayTitle = String(candidate?.display?.title || '').trim()
+  if (displayTitle) return displayTitle
+
+  const decodedText = extractRoiDecodedText(candidate)
+  try {
+    const parsed = JSON.parse(decodedText)
+    if (parsed?.type && (parsed?.id || parsed?.sku || parsed?.lot_number || parsed?.bin_code)) {
+      return `${parsed.type}: ${parsed.id || parsed.sku || parsed.lot_number || parsed.bin_code}`
+    }
+  } catch (_error) {
+    // Plain barcode fallback below.
+  }
+
+  return decodedText || 'Unknown label'
+}
+
+const formatRoiCandidateSubtitle = (candidate) => {
+  const displaySubtitle = String(candidate?.display?.subtitle || '').trim()
+  if (displaySubtitle) return displaySubtitle
+
+  const type = resolveRoiCandidateType(candidate)
+  const decodedText = extractRoiDecodedText(candidate)
+  if (type === 'ITEM' && /^\d{8,14}$/.test(decodedText)) return `SKU ${decodedText}`
+  return type === 'CODE' ? 'Scanned label' : `${type} label`
+}
+
+const formatRoiCandidatePrimary = (candidate) => {
+  const display = candidate?.display || {}
+  const primary = String(display.primary || '').trim()
+  const secondary = String(display.secondary || '').trim()
+  if (primary && secondary) return `${primary} · ${secondary}`
+  return primary || secondary
+}
+
+const formatRoiCandidateRaw = (candidate) => extractRoiDecodedText(candidate)
+
+const shouldShowRoiCandidateRaw = (candidate) => {
+  const raw = formatRoiCandidateRaw(candidate)
+  if (!raw) return false
+  const title = formatRoiCandidateTitle(candidate)
+  const subtitle = formatRoiCandidateSubtitle(candidate)
+  return raw !== title && raw !== subtitle
+}
+
+const enrichRoiCandidates = async (candidates) => {
+  if (!candidates.length) return candidates
+
+  const token = localStorage.getItem('token')
+  if (!token) return candidates
+
+  try {
+    const response = await fetch('/api/scanner/roi-assist/resolve-candidates', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        candidates: candidates.map((candidate) => ({
+          candidate_id: candidate.candidate_id,
+          decoded_text: candidate.decoded_text,
+          decoded_texts: candidate.decoded_texts,
+          decoded_types: candidate.decoded_types,
+          class_name: candidate.class_name,
+          confidence: candidate.confidence,
+          score: candidate.score,
+          center_distance_ratio: candidate.center_distance_ratio,
+          center_reference: candidate.center_reference,
+          detection_area_ratio: candidate.detection_area_ratio,
+          quality_score: candidate.quality_score,
+          best_preprocessing_mode: candidate.best_preprocessing_mode,
+          source: candidate.source
+        }))
+      })
+    })
+
+    const payload = await response.json().catch(() => null)
+    if (!response.ok || !payload?.success || !Array.isArray(payload.candidates)) {
+      const message = payload?.message || payload?.error || `HTTP ${response.status}`
+      if (isAuthFailure(response.status, message)) {
+        handleAuthFailure(message)
+      }
+      return candidates
+    }
+
+    const resolvedById = new Map(payload.candidates.map((candidate) => [candidate.candidate_id, candidate]))
+    return candidates.map((candidate) => resolvedById.get(candidate.candidate_id) || candidate)
+  } catch (error) {
+    console.warn('[ROI Assist] candidate enrichment failed', error)
+    return candidates
+  }
 }
 
 const dismissMultiCodePicker = () => {
@@ -1949,24 +1966,22 @@ const selectRoiCandidate = async (candidate) => {
   const decodedText = extractRoiDecodedText(candidate)
   if (!decodedText) return
 
-  const captureLocation = buildLocationFromRoiCandidate(candidate)
   showMultiCodePicker.value = false
   roiAssistCandidates.value = []
   setRoiAssistStatus('Target label selected.', { autoClearMs: 1400 })
   await handleScanResult(decodedText, {
     bypassCooldown: true,
-    sourceMode: 'roi-assist',
-    captureLocation
+    sourceMode: 'roi-assist'
   })
 }
 
 const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
-  const candidates = collectSuccessfulRoiCandidates(payload)
+  const candidates = await enrichRoiCandidates(collectSuccessfulRoiCandidates(payload))
 
   if (candidates.length > 1) {
     roiAssistCandidates.value = candidates
     showMultiCodePicker.value = true
-    showScanCapturePulse('Labels found', buildLocationFromRoiCandidate(candidates[0]))
+    showScanCapturePulse('Labels found')
     setRoiAssistStatus(`${candidates.length} labels found. Choose the target label.`, { autoClearMs: 2400 })
     stopScanLoop()
     if (videoRef.value && !videoRef.value.paused) {
@@ -1977,15 +1992,13 @@ const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
 
   if (candidates.length === 1) {
     const candidate = candidates[0]
-    const captureLocation = buildLocationFromRoiCandidate(candidate)
     setRoiAssistStatus(
       trigger === 'auto' ? 'Enhanced scan found a label.' : 'ROI Assist found a label.',
       { autoClearMs: 1800 }
     )
     await handleScanResult(candidate.decoded_text, {
       bypassCooldown: true,
-      sourceMode: 'roi-assist',
-      captureLocation
+      sourceMode: 'roi-assist'
     })
     return
   }
@@ -2010,6 +2023,10 @@ const triggerRoiAssist = async (trigger = 'manual') => {
     formData.append('mode', 'obb')
     formData.append('trigger', trigger)
     formData.append('operation_context', scanAction.value || 'scan')
+    const scanFrame = getNormalizedScanFrame()
+    if (scanFrame) {
+      formData.append('scan_frame', JSON.stringify(scanFrame))
+    }
 
     const startedAt = performance.now()
     const response = await fetchWithTimeout('/api/scanner/roi-assist', {
@@ -2097,8 +2114,7 @@ const handleScannerWorkerMessage = (event) => {
       fillRatio: payload.fillRatio
     })
     void handleScanResult(payload.decodedText, {
-      sourceMode: 'camera',
-      captureLocation: payload.location || null
+      sourceMode: 'camera'
     })
     return
   }
@@ -3061,7 +3077,7 @@ const handleManualSubmit = () => {
 
 // 处理扫描结果
 const handleScanResult = async (rawData, options = {}) => {
-  const { bypassCooldown = false, silent = false, captureLocation = null } = options
+  const { bypassCooldown = false, silent = false } = options
   const normalizedRaw = String(rawData || '').trim()
 
   if (!normalizedRaw) return
@@ -3072,7 +3088,7 @@ const handleScanResult = async (rawData, options = {}) => {
   lastProcessedScan.value = normalizedRaw
   lastProcessedAt.value = Date.now()
   if (!silent) {
-    showScanCapturePulse('Code captured', captureLocation)
+    showScanCapturePulse('Code captured')
   }
 
   try {
@@ -3756,162 +3772,19 @@ const playActionSuccessSound = () => {
 }
 
 .scan-frame-locked {
-  border-color: rgba(134, 239, 172, 0.96);
+  border-color: rgba(187, 247, 208, 0.98);
   background:
-    radial-gradient(circle at center, rgba(16, 185, 129, 0.22) 0%, rgba(16, 185, 129, 0.1) 42%, rgba(16, 185, 129, 0) 72%);
+    radial-gradient(circle at center, rgba(16, 185, 129, 0.16) 0%, rgba(16, 185, 129, 0.07) 45%, rgba(16, 185, 129, 0) 74%);
   box-shadow:
-    0 0 0 999px rgba(16, 185, 129, 0.08),
-    0 0 34px rgba(16, 185, 129, 0.46),
-    inset 0 0 28px rgba(16, 185, 129, 0.18);
+    0 0 0 999px rgba(16, 185, 129, 0.035),
+    0 0 26px rgba(16, 185, 129, 0.34),
+    inset 0 0 20px rgba(16, 185, 129, 0.12);
+  animation: scanFrameCaptured 0.92s cubic-bezier(0.2, 0.9, 0.22, 1) both;
 }
 
 .scan-frame-locked .corner {
-  border-color: #86efac;
-  filter: drop-shadow(0 0 12px rgba(134, 239, 172, 0.86));
-}
-
-.scan-capture-pulse {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 15px;
-  border-radius: 999px;
-  border: 1px solid rgba(187, 247, 208, 0.72);
-  background: rgba(5, 150, 105, 0.78);
-  color: #ffffff;
-  font-size: 0.88rem;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  box-shadow:
-    0 18px 40px rgba(16, 185, 129, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.26);
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
-  animation: scanCapturePop 0.92s cubic-bezier(0.2, 0.9, 0.22, 1) both;
-}
-
-.scan-capture-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: #bbf7d0;
-  box-shadow: 0 0 0 0 rgba(187, 247, 208, 0.72);
-  animation: scanCaptureDot 0.92s ease-out infinite;
-}
-
-.scan-code-lock {
-  position: absolute;
-  border: 2px solid rgba(134, 239, 172, 0.92);
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.22), rgba(16, 185, 129, 0.08) 52%, rgba(16, 185, 129, 0.01) 100%);
-  box-shadow:
-    0 0 0 999px rgba(16, 185, 129, 0.04),
-    0 16px 40px rgba(16, 185, 129, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.28);
-  backdrop-filter: blur(2px) saturate(125%);
-  -webkit-backdrop-filter: blur(2px) saturate(125%);
-  animation: scanCodeLockPop 0.92s cubic-bezier(0.2, 0.9, 0.22, 1) both;
-}
-
-.scan-code-lock-corner {
-  position: absolute;
-  width: 22px;
-  height: 22px;
-  border: 4px solid #34d399;
-  filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.8));
-}
-
-.scan-code-lock-top-left {
-  top: -5px;
-  left: -5px;
-  border-right: none;
-  border-bottom: none;
-  border-top-left-radius: 14px;
-}
-
-.scan-code-lock-top-right {
-  top: -5px;
-  right: -5px;
-  border-left: none;
-  border-bottom: none;
-  border-top-right-radius: 14px;
-}
-
-.scan-code-lock-bottom-left {
-  bottom: -5px;
-  left: -5px;
-  border-right: none;
-  border-top: none;
-  border-bottom-left-radius: 14px;
-}
-
-.scan-code-lock-bottom-right {
-  right: -5px;
-  bottom: -5px;
-  border-left: none;
-  border-top: none;
-  border-bottom-right-radius: 14px;
-}
-
-.scan-code-lock-dot {
-  position: absolute;
-  top: -10px;
-  right: -10px;
-  width: 18px;
-  height: 18px;
-  border: 3px solid rgba(255, 255, 255, 0.9);
-  border-radius: 999px;
-  background: #22c55e;
-  box-shadow:
-    0 0 0 0 rgba(34, 197, 94, 0.74),
-    0 10px 20px rgba(4, 120, 87, 0.26);
-  animation: scanCaptureDot 0.92s ease-out infinite;
-}
-
-.scan-code-lock-label {
-  position: absolute;
-  left: 50%;
-  bottom: -42px;
-  transform: translateX(-50%);
-  padding: 7px 12px;
-  border: 1px solid rgba(187, 247, 208, 0.68);
-  border-radius: 999px;
-  background: rgba(6, 95, 70, 0.78);
-  color: #ffffff;
-  font-size: 0.78rem;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  box-shadow:
-    0 14px 28px rgba(4, 120, 87, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.24);
-  backdrop-filter: blur(14px) saturate(150%);
-  -webkit-backdrop-filter: blur(14px) saturate(150%);
-}
-
-@keyframes scanCapturePop {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.84);
-  }
-  18% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1.04);
-  }
-  72% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.96);
-  }
+  border-color: #bbf7d0;
+  filter: drop-shadow(0 0 10px rgba(134, 239, 172, 0.72));
 }
 
 @keyframes scanCaptureDot {
@@ -3926,22 +3799,18 @@ const playActionSuccessSound = () => {
   }
 }
 
-@keyframes scanCodeLockPop {
+@keyframes scanFrameCaptured {
   0% {
-    opacity: 0;
-    transform: scale(0.9);
+    opacity: 0.82;
+    transform: scale(0.985);
   }
-  18% {
+  22% {
     opacity: 1;
-    transform: scale(1.025);
-  }
-  72% {
-    opacity: 1;
-    transform: scale(1);
+    transform: scale(1.012);
   }
   100% {
-    opacity: 0;
-    transform: scale(0.98);
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
@@ -3981,10 +3850,39 @@ const playActionSuccessSound = () => {
 }
 
 .scan-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 40px;
   margin-top: 20px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
   color: white;
   font-weight: 600;
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+  transition: all 0.18s ease;
+}
+
+.scan-hint-captured {
+  border-color: rgba(187, 247, 208, 0.7);
+  background: rgba(6, 95, 70, 0.72);
+  box-shadow:
+    0 16px 36px rgba(4, 120, 87, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  text-shadow: none;
+}
+
+.scan-hint-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #bbf7d0;
+  box-shadow: 0 0 0 0 rgba(187, 247, 208, 0.72);
+  animation: scanCaptureDot 0.92s ease-out infinite;
 }
 
 .camera-controls {
@@ -4526,7 +4424,7 @@ const playActionSuccessSound = () => {
 .multi-code-option {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 6px 12px;
+  gap: 5px 12px;
   width: 100%;
   padding: 14px 16px;
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -4544,8 +4442,8 @@ const playActionSuccessSound = () => {
 }
 
 .multi-code-type {
-  grid-row: span 2;
-  align-self: center;
+  grid-row: 1 / span 5;
+  align-self: start;
   padding: 7px 10px;
   border-radius: 999px;
   background: rgba(15, 23, 42, 0.9);
@@ -4557,14 +4455,42 @@ const playActionSuccessSound = () => {
 }
 
 .multi-code-main {
-  font-size: 1rem;
+  font-size: 1.02rem;
   font-weight: 800;
+  word-break: break-all;
+}
+
+.multi-code-subtitle {
+  color: #334155;
+  font-size: 0.9rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.multi-code-raw {
+  color: #64748b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+  line-height: 1.35;
   word-break: break-all;
 }
 
 .multi-code-meta {
   color: #64748b;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.multi-code-primary {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.11);
+  color: #047857;
+  font-size: 0.76rem;
+  font-weight: 800;
   line-height: 1.35;
 }
 

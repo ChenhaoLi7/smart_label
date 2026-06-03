@@ -3,7 +3,7 @@
 echo "🚀 智能标签系统 - 智能启动脚本"
 echo "================================"
 
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH="/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$SCRIPT_DIR/server"
@@ -120,7 +120,7 @@ start_frontend() {
         npm install || return 1
     fi
 
-    nohup npm run serve -- --host 0.0.0.0 --port 8080 > "$LOG_DIR/frontend.log" 2>&1 &
+    nohup npm run serve -- --host 0.0.0.0 --port 8080 --skip-plugins @vue/cli-plugin-eslint > "$LOG_DIR/frontend.log" 2>&1 &
     FRONTEND_PID=$!
     echo "✅ 前端服务已启动 (PID: $FRONTEND_PID)"
 }

@@ -14,6 +14,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
 import joblib
+import json
 import os
 import sys
 import time
@@ -42,6 +43,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def _is_roi_model_cached() -> bool:
+    try:
+        from src.obb_detect import is_model_cached
+
+        return is_model_cached(ROI_MODEL_PATH)
+    except Exception:
+        return False
+
+
+@app.on_event("startup")
+async def preload_roi_assist_model():
+    """Load the OBB model once so the first ROI Assist request is not cold."""
+    if not ROI_MODEL_PATH.exists() or not OBB_PIPELINE_DIR.exists():
+        return
+
+    try:
+        from src.obb_detect import get_obb_model
+
+        get_obb_model(str(ROI_MODEL_PATH))
+    except Exception as error:
+        print(f"[roi-assist] OBB model preload skipped: {error}")
+
 
 # 数据模型
 class DemandRequest(BaseModel):
@@ -101,11 +125,43 @@ def _safe_mode(value: str) -> str:
         return "obb"
     return normalized
 
+def _parse_scan_frame(value: str) -> Dict[str, Any] | None:
+    if not value:
+        return None
+
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    try:
+        x = float(parsed.get("x", 0.0))
+        y = float(parsed.get("y", 0.0))
+        width = float(parsed.get("width", 0.0))
+        height = float(parsed.get("height", 0.0))
+    except (TypeError, ValueError):
+        return None
+
+    if width <= 0 or height <= 0:
+        return None
+
+    return {
+        "x": max(0.0, min(1.0, x)),
+        "y": max(0.0, min(1.0, y)),
+        "width": max(0.01, min(1.0, width)),
+        "height": max(0.01, min(1.0, height)),
+        "reference": parsed.get("reference") or "scan_frame",
+    }
+
 def _pipeline_health() -> Dict[str, Any]:
     return {
         "service": "roi-assist",
         "model_path": str(ROI_MODEL_PATH),
         "model_ready": ROI_MODEL_PATH.exists(),
+        "model_cached": _is_roi_model_cached(),
         "pipeline_dir": str(OBB_PIPELINE_DIR),
         "pipeline_ready": OBB_PIPELINE_DIR.exists(),
         "dependencies": {
@@ -416,7 +472,8 @@ async def scanner_roi_assist(
     frame: UploadFile = File(...),
     mode: str = Form("obb"),
     trigger: str = Form("manual"),
-    operation_context: str = Form("")
+    operation_context: str = Form(""),
+    scan_frame: str = Form("")
 ):
     """Decode one uploaded scanner frame using server-side ROI assist.
 
@@ -426,6 +483,7 @@ async def scanner_roi_assist(
     started_at = time.perf_counter()
     normalized_mode = _safe_mode(mode)
     normalized_trigger = _safe_trigger(trigger)
+    normalized_scan_frame = _parse_scan_frame(scan_frame)
 
     if not OBB_PIPELINE_DIR.exists():
         raise HTTPException(status_code=503, detail="barcode_obb_pipeline directory is missing")
@@ -468,7 +526,11 @@ async def scanner_roi_assist(
 
         if normalized_mode == "obb":
             proposed_result = _normalize_pipeline_result(
-                decode_with_obb_candidates(str(temp_path), str(ROI_MODEL_PATH)),
+                decode_with_obb_candidates(
+                    str(temp_path),
+                    str(ROI_MODEL_PATH),
+                    target_frame=normalized_scan_frame,
+                ),
                 method="yolo_obb_roi",
             )
             proposed_candidates = proposed_result.get("candidates") or []
@@ -489,6 +551,7 @@ async def scanner_roi_assist(
             "trigger": normalized_trigger,
             "mode": normalized_mode,
             "operation_context": operation_context,
+            "scan_frame": normalized_scan_frame,
             "method": selected_result["method"],
             "decoded_texts": selected_texts or selected_result["decoded_texts"],
             "decoded_types": selected_types or selected_result["decoded_types"],

@@ -7,6 +7,8 @@ import numpy as np
 
 from .utils import resolve_project_path
 
+_MODEL_CACHE: dict[str, Any] = {}
+
 
 def _xyxy_to_points(box: np.ndarray) -> list[list[float]]:
     x1, y1, x2, y2 = [float(value) for value in box[:4]]
@@ -42,25 +44,47 @@ def _class_name(names: Any, class_id: int) -> str:
     return f"class_{class_id}"
 
 
-def detect_barcodes_obb(image_path: str, model_path: str, conf: float = 0.25) -> list[dict]:
-    resolved_image = resolve_project_path(image_path)
+def get_obb_model(model_path: str):
     resolved_model = resolve_project_path(model_path)
+    cache_key = str(resolved_model)
+
+    if cache_key in _MODEL_CACHE:
+        return _MODEL_CACHE[cache_key]
 
     if not resolved_model.exists():
         print(
             "[barcode_obb_pipeline] Missing OBB model. "
             f"Expected: {resolved_model}. Train or copy a model to this path first."
         )
-        return []
+        return None
 
     try:
         from ultralytics import YOLO
     except Exception as error:
         print(f"[barcode_obb_pipeline] ultralytics unavailable: {error}")
-        return []
+        return None
 
     try:
         model = YOLO(str(resolved_model))
+    except Exception as error:
+        print(f"[barcode_obb_pipeline] OBB model load failed: {error}")
+        return None
+
+    _MODEL_CACHE[cache_key] = model
+    return model
+
+
+def is_model_cached(model_path: str | Path) -> bool:
+    return str(resolve_project_path(model_path)) in _MODEL_CACHE
+
+
+def detect_barcodes_obb(image_path: str, model_path: str, conf: float = 0.25) -> list[dict]:
+    resolved_image = resolve_project_path(image_path)
+    model = get_obb_model(model_path)
+    if model is None:
+        return []
+
+    try:
         results = model(str(resolved_image), conf=conf, verbose=False)
     except Exception as error:
         print(f"[barcode_obb_pipeline] OBB detection failed: {error}")

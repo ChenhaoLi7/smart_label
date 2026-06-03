@@ -32,12 +32,59 @@ def _points_area(points: np.ndarray) -> float:
         return float(max(xs) - min(xs)) * float(max(ys) - min(ys))
 
 
-def _center_distance_ratio(center_x: float, center_y: float, width: int, height: int) -> float:
+def _normalize_target_frame(target_frame: dict | None) -> dict | None:
+    if not target_frame:
+        return None
+
+    try:
+        x = _clamp(float(target_frame.get("x", 0.0)))
+        y = _clamp(float(target_frame.get("y", 0.0)))
+        frame_width = _clamp(float(target_frame.get("width", 0.0)), 0.01, 1.0)
+        frame_height = _clamp(float(target_frame.get("height", 0.0)), 0.01, 1.0)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+    if frame_width <= 0 or frame_height <= 0:
+        return None
+
+    if x + frame_width > 1.0:
+        frame_width = max(0.01, 1.0 - x)
+    if y + frame_height > 1.0:
+        frame_height = max(0.01, 1.0 - y)
+
+    return {
+        "x": x,
+        "y": y,
+        "width": frame_width,
+        "height": frame_height,
+        "reference": target_frame.get("reference") or "scan_frame",
+    }
+
+
+def _center_distance_ratio(
+    center_x: float,
+    center_y: float,
+    width: int,
+    height: int,
+    target_frame: dict | None = None,
+) -> float:
     if width <= 0 or height <= 0:
         return 1.0
 
-    normalized_x = (center_x - (width / 2)) / (width / 2)
-    normalized_y = (center_y - (height / 2)) / (height / 2)
+    normalized_frame = _normalize_target_frame(target_frame)
+    if normalized_frame:
+        target_width = max(width * normalized_frame["width"], 1.0)
+        target_height = max(height * normalized_frame["height"], 1.0)
+        target_center_x = width * (normalized_frame["x"] + (normalized_frame["width"] / 2))
+        target_center_y = height * (normalized_frame["y"] + (normalized_frame["height"] / 2))
+    else:
+        target_width = float(width)
+        target_height = float(height)
+        target_center_x = width / 2
+        target_center_y = height / 2
+
+    normalized_x = (center_x - target_center_x) / (target_width / 2)
+    normalized_y = (center_y - target_center_y) / (target_height / 2)
     return _clamp(float(np.sqrt((normalized_x * normalized_x) + (normalized_y * normalized_y))) / np.sqrt(2))
 
 
@@ -156,7 +203,12 @@ def _empty_result(
     }
 
 
-def decode_with_obb_candidates(image_path: str, model_path: str, conf: float = 0.25) -> dict:
+def decode_with_obb_candidates(
+    image_path: str,
+    model_path: str,
+    conf: float = 0.25,
+    target_frame: dict | None = None,
+) -> dict:
     start_ms = now_ms()
     resolved_image = resolve_project_path(image_path)
 
@@ -191,6 +243,8 @@ def decode_with_obb_candidates(image_path: str, model_path: str, conf: float = 0
     last_error: str | None = None
     image_height, image_width = image.shape[:2]
     image_area = max(float(image_width * image_height), 1.0)
+    normalized_target_frame = _normalize_target_frame(target_frame)
+    center_reference = normalized_target_frame.get("reference", "scan_frame") if normalized_target_frame else "image_center"
     candidates: list[dict] = []
 
     for detection_index, detection in enumerate(detections):
@@ -212,7 +266,13 @@ def decode_with_obb_candidates(image_path: str, model_path: str, conf: float = 0
             center_x, center_y = _points_center(points)
             detection_area = _points_area(points)
             detection_area_ratio = detection_area / image_area
-            center_distance = _center_distance_ratio(center_x, center_y, image_width, image_height)
+            center_distance = _center_distance_ratio(
+                center_x,
+                center_y,
+                image_width,
+                image_height,
+                normalized_target_frame,
+            )
             roi = warp_rotated_roi(image, points)
             quality = assess_roi_quality(roi)
             last_quality = quality
@@ -233,6 +293,8 @@ def decode_with_obb_candidates(image_path: str, model_path: str, conf: float = 0
                 "center_x": None,
                 "center_y": None,
                 "center_distance_ratio": None,
+                "center_reference": center_reference,
+                "target_frame": normalized_target_frame,
                 "detection_area_ratio": None,
                 "quality_score": 0.0,
                 "score": 0.0,
@@ -290,6 +352,8 @@ def decode_with_obb_candidates(image_path: str, model_path: str, conf: float = 0
             "center_x": center_x,
             "center_y": center_y,
             "center_distance_ratio": round(center_distance, 4),
+            "center_reference": center_reference,
+            "target_frame": normalized_target_frame,
             "detection_area_ratio": round(detection_area_ratio, 6),
             "quality_score": _quality_score(quality),
             "score": score,
@@ -366,5 +430,10 @@ def decode_with_obb_candidates(image_path: str, model_path: str, conf: float = 0
     }
 
 
-def decode_with_obb_pipeline(image_path: str, model_path: str, conf: float = 0.25) -> dict:
-    return decode_with_obb_candidates(image_path, model_path, conf=conf)
+def decode_with_obb_pipeline(
+    image_path: str,
+    model_path: str,
+    conf: float = 0.25,
+    target_frame: dict | None = None,
+) -> dict:
+    return decode_with_obb_candidates(image_path, model_path, conf=conf, target_frame=target_frame)
