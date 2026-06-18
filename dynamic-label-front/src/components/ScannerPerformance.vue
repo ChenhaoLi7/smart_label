@@ -23,15 +23,15 @@
       <div class="header-actions">
         <label class="period-select">
           <span>Window</span>
-          <select v-model.number="selectedDays" @change="loadSummary">
+          <select v-model.number="selectedDays" @change="loadDashboard">
             <option v-for="option in dayOptions" :key="option" :value="option">
               Last {{ option }} days
             </option>
           </select>
         </label>
 
-        <button class="glass-btn" @click="loadSummary" :disabled="loading">
-          {{ loading ? 'Refreshing' : 'Refresh' }}
+        <button class="glass-btn" @click="loadDashboard" :disabled="loading || rankingLoading">
+          {{ loading || rankingLoading ? 'Refreshing' : 'Refresh' }}
         </button>
       </div>
     </header>
@@ -60,6 +60,81 @@
           <strong>{{ metric.value }}</strong>
           <p>{{ metric.note }}</p>
         </article>
+      </section>
+
+      <section class="ranking-panel glass-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Ranking Dataset</p>
+            <h3>Multi-code selection training data</h3>
+          </div>
+          <div class="ranking-actions">
+            <span class="panel-chip">{{ rankingSummary.totals?.candidates || 0 }} candidates</span>
+            <button class="glass-btn compact" @click="downloadRankingCsv" :disabled="rankingExporting">
+              {{ rankingExporting ? 'Exporting' : 'Export CSV' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="rankingErrorMessage" class="state-banner error compact-banner">
+          {{ rankingErrorMessage }}
+        </div>
+
+        <div class="ranking-metric-grid">
+          <article v-for="metric in rankingMetrics" :key="metric.label" class="ranking-metric-card">
+            <span>{{ metric.label }}</span>
+            <strong>{{ metric.value }}</strong>
+            <p>{{ metric.note }}</p>
+          </article>
+        </div>
+
+        <div class="ranking-workspace">
+          <article>
+            <div class="mini-panel-head">
+              <strong>Operation contexts</strong>
+              <span>{{ rankingOperationRows.length }} modes</span>
+            </div>
+            <div v-if="rankingOperationRows.length" class="bar-list compact-bars">
+              <div v-for="row in rankingOperationRows" :key="row.operation_mode" class="bar-row">
+                <div class="bar-copy">
+                  <strong>{{ row.operation_mode }}</strong>
+                  <span>{{ row.session_count }} sessions · {{ formatMs(row.avg_confirmation_time_ms) }} confirm</span>
+                </div>
+                <div class="bar-track">
+                  <div class="bar-fill violet" :style="{ width: `${barWidth(row.session_count, rankingOperationRowsForBars)}%` }"></div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-state compact">
+              <strong>No ranking sessions yet</strong>
+              <p>Use ROI Assist with multiple codes, then choose a candidate.</p>
+            </div>
+          </article>
+
+          <article>
+            <div class="mini-panel-head">
+              <strong>Top selected candidates</strong>
+              <span>{{ topSelectedCandidates.length }} labels</span>
+            </div>
+            <div v-if="topSelectedCandidates.length" class="candidate-list">
+              <div v-for="candidate in topSelectedCandidates" :key="`${candidate.barcode_value}-${candidate.operation_mode}`" class="candidate-row">
+                <div>
+                  <strong>{{ candidate.display_title || candidate.candidate_item_id || candidate.parsed_type || 'Unknown label' }}</strong>
+                  <p>{{ candidate.operation_mode || 'SCAN' }} · {{ candidate.parsed_type || 'CODE' }}</p>
+                </div>
+                <span>{{ candidate.selected_count }}/{{ candidate.shown_count }}</span>
+              </div>
+            </div>
+            <div v-else class="empty-state compact">
+              <strong>No selected candidates yet</strong>
+              <p>The selected label history will appear after multi-code decisions.</p>
+            </div>
+          </article>
+        </div>
+
+        <p v-if="rankingStatusMessage" class="ranking-status">
+          {{ rankingStatusMessage }}
+        </p>
       </section>
 
       <section class="workspace-grid">
@@ -218,6 +293,10 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 const loading = ref(false)
 const errorMessage = ref('')
+const rankingLoading = ref(false)
+const rankingExporting = ref(false)
+const rankingErrorMessage = ref('')
+const rankingStatusMessage = ref('')
 const selectedDays = ref(14)
 const dayOptions = [7, 14, 30, 60, 90]
 
@@ -234,6 +313,23 @@ const summary = ref({
   byDecodedFormat: [],
   byScenarioTag: [],
   recent: []
+})
+
+const rankingSummary = ref({
+  filters: {},
+  totals: {
+    sessions: 0,
+    sessions_with_selection: 0,
+    candidates: 0,
+    selected_candidates: 0,
+    session_resolution_rate: 0,
+    candidate_selected_rate: 0
+  },
+  by_operation_mode: [],
+  by_decision_type: [],
+  by_trigger: [],
+  feature_averages: {},
+  top_selected_candidates: []
 })
 
 const formatPercent = (value) => {
@@ -253,6 +349,40 @@ const formatScore = (value) => {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return '-'
   return `${Math.round(numeric * 100)}`
+}
+
+const formatDecimal = (value, digits = 2) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '-'
+  return numeric.toFixed(digits)
+}
+
+const dateRangeQuery = computed(() => {
+  const end = new Date()
+  const start = new Date(end)
+  start.setDate(start.getDate() - Number(selectedDays.value || 14))
+
+  const params = new URLSearchParams({
+    start: start.toISOString(),
+    end: end.toISOString()
+  })
+
+  return params.toString()
+})
+
+const extractDownloadFilename = (contentDisposition, fallback) => {
+  const disposition = String(contentDisposition || '')
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1])
+    } catch (_error) {
+      return utf8Match[1]
+    }
+  }
+
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i)
+  return plainMatch?.[1] || fallback
 }
 
 const formatDateTime = (value) => {
@@ -307,6 +437,34 @@ const primaryMetrics = computed(() => [
   }
 ])
 
+const rankingMetrics = computed(() => {
+  const totals = rankingSummary.value.totals || {}
+  const featureAverages = rankingSummary.value.feature_averages || {}
+
+  return [
+    {
+      label: 'Selection Sessions',
+      value: String(totals.sessions || 0),
+      note: 'Multi-code or ROI Assist decisions recorded for ML ranking.'
+    },
+    {
+      label: 'Candidate Rows',
+      value: String(totals.candidates || 0),
+      note: 'Each row is one candidate label with visual and context features.'
+    },
+    {
+      label: 'Resolved Sessions',
+      value: formatPercent(totals.session_resolution_rate),
+      note: `${totals.sessions_with_selection || 0} sessions have a selected target label.`
+    },
+    {
+      label: 'Avg Rule Score',
+      value: formatDecimal(featureAverages.avg_rule_based_score),
+      note: 'Current rule-based ranking signal, before LightGBM training.'
+    }
+  ]
+})
+
 const readinessTone = computed(() => {
   if (summary.value.total === 0) return 'neutral'
   if (summary.value.successRate >= 0.9 && (!summary.value.avgLockMs || summary.value.avgLockMs <= 1800)) return 'good'
@@ -350,6 +508,19 @@ const engineRows = computed(() => {
 })
 
 const recentRows = computed(() => summary.value.recent || [])
+
+const rankingOperationRows = computed(() => rankingSummary.value.by_operation_mode || [])
+
+const rankingOperationRowsForBars = computed(() => {
+  return rankingOperationRows.value.map((row) => ({
+    ...row,
+    total: row.session_count
+  }))
+})
+
+const topSelectedCandidates = computed(() => {
+  return [...(rankingSummary.value.top_selected_candidates || [])].slice(0, 6)
+})
 
 const findTag = (tag) => {
   return (summary.value.byScenarioTag || []).find((row) => row.label === tag)
@@ -427,11 +598,98 @@ const loadSummary = async () => {
   }
 }
 
+const loadRankingSummary = async () => {
+  rankingLoading.value = true
+  rankingErrorMessage.value = ''
+
+  try {
+    const token = localStorage.getItem('token')
+    const response = await fetch(`/api/scanner/roi-assist/ranking-summary?${dateRangeQuery.value}`, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    })
+
+    if (response.status === 401) {
+      router.push('/login')
+      return
+    }
+
+    const result = await response.json()
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Failed to load ranking dataset summary.')
+    }
+
+    rankingSummary.value = {
+      ...rankingSummary.value,
+      ...(result.summary || {})
+    }
+  } catch (error) {
+    rankingErrorMessage.value = error.message || 'Failed to load ranking dataset summary.'
+  } finally {
+    rankingLoading.value = false
+  }
+}
+
+const loadDashboard = async () => {
+  await Promise.all([
+    loadSummary(),
+    loadRankingSummary()
+  ])
+}
+
+const downloadRankingCsv = async () => {
+  rankingExporting.value = true
+  rankingStatusMessage.value = 'Preparing ranking training CSV...'
+  rankingErrorMessage.value = ''
+
+  try {
+    const token = localStorage.getItem('token')
+    const response = await fetch(`/api/scanner/roi-assist/ranking-export?${dateRangeQuery.value}`, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    })
+
+    if (response.status === 401) {
+      router.push('/login')
+      return
+    }
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}))
+      throw new Error(result.message || 'Failed to export ranking training CSV.')
+    }
+
+    const blob = await response.blob()
+    const filename = extractDownloadFilename(
+      response.headers.get('content-disposition'),
+      `scanner-ranking-training-${Date.now()}.csv`
+    )
+    const downloadUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(downloadUrl)
+
+    rankingStatusMessage.value = `Downloaded ${filename}`
+    await loadRankingSummary()
+  } catch (error) {
+    rankingErrorMessage.value = error.message || 'Failed to export ranking training CSV.'
+    rankingStatusMessage.value = ''
+  } finally {
+    rankingExporting.value = false
+  }
+}
+
 const goBack = () => {
   router.push('/dashboard')
 }
 
-onMounted(loadSummary)
+onMounted(loadDashboard)
 </script>
 
 <style scoped>
@@ -518,6 +776,13 @@ onMounted(loadSummary)
   padding: 0 18px;
   border-radius: 16px;
   font-weight: 800;
+}
+
+.glass-btn.compact {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 0.86rem;
 }
 
 .back-btn:hover,
@@ -707,6 +972,142 @@ h3 {
 
 .metric-card.risk strong {
   color: #b91c1c;
+}
+
+.ranking-panel {
+  padding: 24px;
+  border-radius: 32px;
+}
+
+.ranking-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.compact-banner {
+  margin-bottom: 16px;
+}
+
+.ranking-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.ranking-metric-card {
+  min-height: 138px;
+  display: grid;
+  align-content: space-between;
+  gap: 10px;
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid rgba(37, 99, 235, 0.13);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.84), rgba(239, 246, 255, 0.72)),
+    radial-gradient(circle at top right, rgba(99, 102, 241, 0.12), transparent 36%);
+}
+
+.ranking-metric-card span {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.ranking-metric-card strong {
+  color: #172554;
+  font-size: 2.2rem;
+  letter-spacing: -0.06em;
+}
+
+.ranking-metric-card p,
+.candidate-row p,
+.ranking-status {
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.ranking-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.ranking-workspace article {
+  min-height: 250px;
+  padding: 18px;
+  border-radius: 26px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.mini-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.mini-panel-head strong {
+  color: #111827;
+}
+
+.mini-panel-head span {
+  color: #64748b;
+  font-weight: 800;
+}
+
+.compact-bars {
+  gap: 12px;
+}
+
+.bar-fill.violet {
+  background: linear-gradient(90deg, #6366f1, #22d3ee);
+}
+
+.candidate-list {
+  display: grid;
+  gap: 10px;
+}
+
+.candidate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.82);
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.candidate-row strong {
+  display: block;
+  max-width: 360px;
+  overflow: hidden;
+  color: #111827;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-row span {
+  flex: none;
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: rgba(219, 234, 254, 0.82);
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.ranking-status {
+  margin-top: 14px;
+  font-weight: 800;
 }
 
 .workspace-grid {
@@ -932,8 +1333,13 @@ td {
 
 @media (max-width: 1100px) {
   .metric-grid,
+  .ranking-metric-grid,
   .workspace-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ranking-workspace {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -952,6 +1358,7 @@ td {
   }
 
   .metric-grid,
+  .ranking-metric-grid,
   .workspace-grid {
     grid-template-columns: 1fr;
   }

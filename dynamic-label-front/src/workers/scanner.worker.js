@@ -136,6 +136,19 @@ const buildSquareRoi = (width, height) => {
   }
 }
 
+const buildLinearRoiAt = (width, height, centerYRatio = 0.5) => {
+  const cropWidth = Math.min(width * 0.94, width)
+  const cropHeight = Math.min(Math.max(height * 0.18, 120), height * 0.34)
+  const centerY = height * centerYRatio
+
+  return {
+    x: Math.max((width - cropWidth) / 2, 0),
+    y: clamp(centerY - (cropHeight / 2), 0, Math.max(height - cropHeight, 0)),
+    width: cropWidth,
+    height: cropHeight
+  }
+}
+
 const buildCandidateSource = (crop, candidateWidth, candidateHeight, frameWidth, frameHeight, rotationDegrees = 0) => ({
   cropX: crop.x,
   cropY: crop.y,
@@ -194,11 +207,36 @@ const getBoundingBoxPoints = (box) => {
   ]
 }
 
+const getCandidateFallbackPoints = (candidate) => {
+  const source = candidate?.source
+  if (!source || String(candidate?.label || '').includes('full-frame')) return []
+
+  const label = String(candidate?.label || '')
+  const isLinearCandidate = label.startsWith('linear-')
+  const xInset = source.candidateWidth * (isLinearCandidate ? 0.04 : 0.08)
+  const yInset = source.candidateHeight * (isLinearCandidate ? 0.22 : 0.08)
+  const left = xInset
+  const top = yInset
+  const right = Math.max(source.candidateWidth - xInset, left + 1)
+  const bottom = Math.max(source.candidateHeight - yInset, top + 1)
+
+  return [
+    { x: left, y: top },
+    { x: right, y: top },
+    { x: right, y: bottom },
+    { x: left, y: bottom }
+  ]
+}
+
 const buildFrameLocation = (candidate, points) => {
   const source = candidate?.source
-  if (!source || !Array.isArray(points) || !points.length) return null
+  const candidatePoints = Array.isArray(points) && points.length
+    ? points
+    : getCandidateFallbackPoints(candidate)
 
-  const framePoints = points.map((point) => {
+  if (!source || !candidatePoints.length) return null
+
+  const framePoints = candidatePoints.map((point) => {
     const unrotated = rotatePointAroundCenter(
       point,
       source.candidateWidth,
@@ -217,7 +255,8 @@ const buildFrameLocation = (candidate, points) => {
     points: framePoints,
     frameWidth: source.frameWidth,
     frameHeight: source.frameHeight,
-    candidateLabel: candidate.label
+    candidateLabel: candidate.label,
+    inferred: !(Array.isArray(points) && points.length)
   }
 }
 
@@ -722,6 +761,65 @@ const buildQrScoutCandidatesFromFrame = (rgba, frameWidth, frameHeight, metrics,
   return candidates
 }
 
+const buildLinearDecodeCandidatesFromFrame = (rgba, frameWidth, frameHeight, metrics, options = {}) => {
+  const includeEnhancedAssist = options.includeEnhancedAssist !== false
+  const includeBinaryAssist = options.includeBinaryAssist === true
+  const includeTiltAssist = options.includeTiltAssist === true
+  const bands = options.bands || [0.42, 0.5, 0.58]
+  const candidates = []
+
+  bands.forEach((centerYRatio, index) => {
+    const roi = buildLinearRoiAt(frameWidth, frameHeight, centerYRatio)
+    const targetWidth = clamp(Math.round(roi.width * 1.12), 760, 1280)
+    const targetHeight = clamp(Math.round(roi.height * 1.08), 140, 320)
+    const baseData = cropAndScaleRgba(rgba, frameWidth, frameHeight, roi, targetWidth, targetHeight)
+    const source = buildCandidateSource(roi, targetWidth, targetHeight, frameWidth, frameHeight)
+    const labelPrefix = index === 1 ? 'linear-center' : `linear-band-${index + 1}`
+
+    candidates.push({
+      label: labelPrefix,
+      data: baseData,
+      width: targetWidth,
+      height: targetHeight,
+      source
+    })
+
+    if (includeTiltAssist) {
+      [-5, 5].forEach((angle) => {
+        candidates.push({
+          label: `${labelPrefix}-tilt-${angle}`,
+          data: rotateRgbaSameSize(baseData, targetWidth, targetHeight, angle),
+          width: targetWidth,
+          height: targetHeight,
+          source: buildCandidateSource(roi, targetWidth, targetHeight, frameWidth, frameHeight, angle)
+        })
+      })
+    }
+
+    if (includeEnhancedAssist) {
+      candidates.push({
+        label: `${labelPrefix}-enhanced`,
+        data: enhanceLowLightRgba(baseData, targetWidth, targetHeight, metrics),
+        width: targetWidth,
+        height: targetHeight,
+        source
+      })
+    }
+
+    if (includeBinaryAssist) {
+      candidates.push({
+        label: `${labelPrefix}-binary`,
+        data: applyBlockThresholdRgba(baseData, targetWidth, targetHeight, metrics),
+        width: targetWidth,
+        height: targetHeight,
+        source
+      })
+    }
+  })
+
+  return candidates
+}
+
 const computeFillRatioFromBoundingBox = (box, width, height) => {
   if (!box || !width || !height) return null
 
@@ -905,6 +1003,16 @@ const decodeFrame = async ({ width, height, buffer, imageBitmap, missStreak = 0 
     if (qrScoutCandidates.length) {
       decoded = await decodeFromCandidates(qrScoutCandidates)
     }
+  }
+
+  if (!decoded?.text && missStreak >= 3) {
+    const linearCandidates = buildLinearDecodeCandidatesFromFrame(rgba, width, height, metrics, {
+      includeEnhancedAssist: true,
+      includeBinaryAssist: missStreak >= 5 || metrics.lowLight,
+      includeTiltAssist: missStreak >= 5 || metrics.blurry
+    })
+
+    decoded = await decodeFromCandidates(linearCandidates)
   }
 
   if (!decoded?.text) {

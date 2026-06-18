@@ -1,9 +1,7 @@
 import { BrowserMultiFormatReader } from '@zxing/browser'
 import { BarcodeFormat, DecodeHintType } from '@zxing/library'
 
-const DEFAULT_FORMATS = [
-  BarcodeFormat.QR_CODE,
-  BarcodeFormat.DATA_MATRIX,
+const ONE_D_FORMATS = [
   BarcodeFormat.CODE_128,
   BarcodeFormat.CODE_39,
   BarcodeFormat.CODE_93,
@@ -13,6 +11,12 @@ const DEFAULT_FORMATS = [
   BarcodeFormat.UPC_E,
   BarcodeFormat.ITF,
   BarcodeFormat.CODABAR
+]
+
+const DEFAULT_FORMATS = [
+  BarcodeFormat.QR_CODE,
+  BarcodeFormat.DATA_MATRIX,
+  ...ONE_D_FORMATS
 ]
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max)
@@ -221,6 +225,21 @@ const buildSquareRoi = (video) => {
   }
 }
 
+const buildLinearRoiAt = (video, centerYRatio = 0.5) => {
+  const width = video.videoWidth || 1280
+  const height = video.videoHeight || 720
+  const cropWidth = Math.min(width * 0.94, width)
+  const cropHeight = Math.min(Math.max(height * 0.18, 120), height * 0.34)
+  const centerY = height * centerYRatio
+
+  return {
+    x: Math.max((width - cropWidth) / 2, 0),
+    y: clamp(centerY - (cropHeight / 2), 0, Math.max(height - cropHeight, 0)),
+    width: cropWidth,
+    height: cropHeight
+  }
+}
+
 const buildCandidateSource = (crop, candidateWidth, candidateHeight, frameWidth, frameHeight, rotationDegrees = 0) => ({
   cropX: crop.x,
   cropY: crop.y,
@@ -263,11 +282,36 @@ const normalizeResultPoints = (points) => {
     .filter(Boolean)
 }
 
+const getCandidateFallbackPoints = (candidate) => {
+  const source = candidate?.source
+  if (!source || String(candidate?.label || '').includes('full-frame')) return []
+
+  const label = String(candidate?.label || '')
+  const isLinearCandidate = label.startsWith('linear-')
+  const xInset = source.candidateWidth * (isLinearCandidate ? 0.04 : 0.08)
+  const yInset = source.candidateHeight * (isLinearCandidate ? 0.22 : 0.08)
+  const left = xInset
+  const top = yInset
+  const right = Math.max(source.candidateWidth - xInset, left + 1)
+  const bottom = Math.max(source.candidateHeight - yInset, top + 1)
+
+  return [
+    { x: left, y: top },
+    { x: right, y: top },
+    { x: right, y: bottom },
+    { x: left, y: bottom }
+  ]
+}
+
 const buildFrameLocation = (candidate, points) => {
   const source = candidate?.source
-  if (!source || !Array.isArray(points) || !points.length) return null
+  const candidatePoints = Array.isArray(points) && points.length
+    ? points
+    : getCandidateFallbackPoints(candidate)
 
-  const framePoints = points.map((point) => {
+  if (!source || !candidatePoints.length) return null
+
+  const framePoints = candidatePoints.map((point) => {
     const unrotated = rotatePointAroundCenter(
       point,
       source.candidateWidth,
@@ -286,7 +330,8 @@ const buildFrameLocation = (candidate, points) => {
     points: framePoints,
     frameWidth: source.frameWidth,
     frameHeight: source.frameHeight,
-    candidateLabel: candidate.label
+    candidateLabel: candidate.label,
+    inferred: !(Array.isArray(points) && points.length)
   }
 }
 
@@ -456,6 +501,54 @@ export const buildDecodeCandidatesFromVideo = (video, cache, metrics, options = 
       source: buildCandidateSource({ x: 0, y: 0, width: frameWidth, height: frameHeight }, fullWidth, fullHeight, frameWidth, frameHeight)
     })
   }
+
+  return candidates
+}
+
+export const buildLinearDecodeCandidatesFromVideo = (video, cache, metrics, options = {}) => {
+  const frameWidth = video.videoWidth || 1280
+  const frameHeight = video.videoHeight || 720
+  const includeEnhancedAssist = options.includeEnhancedAssist !== false
+  const includeBinaryAssist = options.includeBinaryAssist === true
+  const includeTiltAssist = options.includeTiltAssist === true
+  const bands = options.bands || [0.42, 0.5, 0.58]
+  const candidates = []
+
+  bands.forEach((centerYRatio, index) => {
+    const roi = buildLinearRoiAt(video, centerYRatio)
+    const targetWidth = clamp(Math.round(roi.width * 1.12), 760, 1280)
+    const targetHeight = clamp(Math.round(roi.height * 1.08), 140, 320)
+    const canvas = ensureCanvas(cache, `linearRoiCanvas${index}`, targetWidth, targetHeight)
+    drawCrop(video, canvas, roi)
+    const source = buildCandidateSource(roi, targetWidth, targetHeight, frameWidth, frameHeight)
+    const labelPrefix = index === 1 ? 'linear-center' : `linear-band-${index + 1}`
+
+    candidates.push({ label: labelPrefix, canvas, source })
+
+    if (includeTiltAssist) {
+      [-5, 5].forEach((angle) => {
+        const rotatedCanvas = ensureCanvas(cache, `linearTilt${index}_${angle}`, targetWidth, targetHeight)
+        rotateCanvasInto(canvas, rotatedCanvas, angle)
+        candidates.push({
+          label: `${labelPrefix}-tilt-${angle}`,
+          canvas: rotatedCanvas,
+          source: buildCandidateSource(roi, targetWidth, targetHeight, frameWidth, frameHeight, angle)
+        })
+      })
+    }
+
+    if (includeEnhancedAssist) {
+      const enhancedCanvas = ensureCanvas(cache, `linearEnhancedCanvas${index}`, targetWidth, targetHeight)
+      enhanceLowLight(canvas, enhancedCanvas, metrics)
+      candidates.push({ label: `${labelPrefix}-enhanced`, canvas: enhancedCanvas, source })
+    }
+
+    if (includeBinaryAssist) {
+      const binaryCanvas = ensureCanvas(cache, `linearBinaryCanvas${index}`, targetWidth, targetHeight)
+      applyBlockThreshold(canvas, binaryCanvas, metrics)
+      candidates.push({ label: `${labelPrefix}-binary`, canvas: binaryCanvas, source })
+    }
+  })
 
   return candidates
 }

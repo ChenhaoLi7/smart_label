@@ -18,7 +18,16 @@
     <!-- 扫码区域 -->
     <div class="scanner-area">
       <!-- 摄像头预览 -->
-      <div v-if="currentMode === 'camera'" :class="['camera-container', { 'camera-container-suspended': shouldSuspendLiveScanner }]">
+      <div
+        v-if="currentMode === 'camera'"
+        :class="[
+          'camera-container',
+          {
+            'camera-container-suspended': shouldSuspendLiveScanner,
+            'camera-container-capture-visible': scanCapturePulse
+          }
+        ]"
+      >
         <div class="camera-stage">
           <video 
             ref="videoRef" 
@@ -42,15 +51,28 @@
           
           <!-- 扫描框 -->
           <div class="scan-overlay">
-            <div ref="scanFrameRef" :class="['scan-frame', { 'scan-frame-locked': scanCapturePulse }]">
+            <div ref="scanFrameRef" :class="['scan-frame', { 'scan-frame-locked': scanCapturePulse && !hasPositionedScanCapture }]">
               <div class="corner top-left"></div>
               <div class="corner top-right"></div>
               <div class="corner bottom-left"></div>
               <div class="corner bottom-right"></div>
             </div>
+            <div
+              v-if="scanCapturePulse && hasPositionedScanCapture"
+              class="scan-code-lock"
+              :style="scanCaptureOverlayStyle"
+              aria-live="polite"
+            >
+              <span class="scan-code-lock-corner scan-code-lock-top-left"></span>
+              <span class="scan-code-lock-corner scan-code-lock-top-right"></span>
+              <span class="scan-code-lock-corner scan-code-lock-bottom-left"></span>
+              <span class="scan-code-lock-corner scan-code-lock-bottom-right"></span>
+              <span class="scan-code-lock-dot"></span>
+              <span class="scan-code-lock-label">{{ scanCaptureMessage }}</span>
+            </div>
             <p :class="['scan-hint', { 'scan-hint-captured': scanCapturePulse }]" aria-live="polite">
               <span v-if="scanCapturePulse" class="scan-hint-dot"></span>
-              <span>{{ scanCapturePulse ? scanCaptureMessage : 'Please place the barcode inside the frame' }}</span>
+              <span>{{ scanCapturePulse ? scanCaptureMessage : scanGuidanceMessage }}</span>
             </p>
           </div>
         </div>
@@ -79,6 +101,96 @@
           {{ roiAssistStatus }}
         </div>
 
+      </div>
+
+      <div class="benchmark-panel">
+        <button class="benchmark-toggle" @click="showBenchmarkPanel = !showBenchmarkPanel">
+          <span>Scanner Performance</span>
+          <span>{{ benchmarkStats.total }} samples · {{ formatPercent(benchmarkStats.successRate) }} success</span>
+        </button>
+        <div v-if="showBenchmarkPanel" class="benchmark-body">
+          <div class="benchmark-grid">
+            <div class="benchmark-card">
+              <span class="benchmark-label">Avg lock</span>
+              <strong>{{ formatMs(benchmarkStats.avgLockMs) }}</strong>
+            </div>
+            <div class="benchmark-card">
+              <span class="benchmark-label">Avg camera open</span>
+              <strong>{{ formatMs(benchmarkStats.avgFirstFrameMs) }}</strong>
+            </div>
+            <div class="benchmark-card">
+              <span class="benchmark-label">1D barcode</span>
+              <strong>{{ benchmarkStats.oneDimCount }} scans</strong>
+            </div>
+            <div class="benchmark-card">
+              <span class="benchmark-label">ROI / assist</span>
+              <strong>{{ benchmarkStats.roiAssistCount }} uses</strong>
+            </div>
+          </div>
+          <div class="benchmark-actions">
+            <button class="benchmark-action" @click="showBenchmarkPanel = false">Hide</button>
+            <button
+              v-if="isAdmin"
+              class="benchmark-action"
+              @click="fetchRankingSummary"
+              :disabled="isLoadingRankingSummary"
+            >
+              {{ isLoadingRankingSummary ? 'Refreshing...' : 'Refresh ranking summary' }}
+            </button>
+            <button
+              v-if="isAdmin"
+              class="benchmark-action"
+              @click="downloadRankingTrainingCsv"
+              :disabled="isExportingRankingCsv"
+            >
+              {{ isExportingRankingCsv ? 'Exporting...' : 'Export ranking CSV' }}
+            </button>
+            <button class="benchmark-action danger" @click="clearLocalBenchmarkSessions" :disabled="!localBenchmarkSessions.length">
+              Clear local stats
+            </button>
+          </div>
+          <div v-if="isAdmin && rankingSummary" class="ranking-summary">
+            <div class="ranking-summary-card">
+              <span>Ranking sessions</span>
+              <strong>{{ rankingSummary.totals?.sessions || 0 }}</strong>
+            </div>
+            <div class="ranking-summary-card">
+              <span>Candidates</span>
+              <strong>{{ rankingSummary.totals?.candidates || 0 }}</strong>
+            </div>
+            <div class="ranking-summary-card">
+              <span>Resolution rate</span>
+              <strong>{{ formatPercent(rankingSummary.totals?.session_resolution_rate) }}</strong>
+            </div>
+            <div class="ranking-summary-card">
+              <span>Avg rule score</span>
+              <strong>{{ formatScore(rankingSummary.feature_averages?.avg_rule_based_score) }}</strong>
+            </div>
+          </div>
+          <p v-if="rankingExportStatus" class="ranking-export-status">
+            {{ rankingExportStatus }}
+          </p>
+          <div class="benchmark-recent">
+            <h4>Recent scanner sessions</h4>
+            <div v-if="localBenchmarkSessions.length" class="benchmark-list">
+              <div
+                v-for="session in localBenchmarkSessions.slice(0, 5)"
+                :key="session.id"
+                class="benchmark-row"
+              >
+                <div>
+                  <strong>{{ session.labelType || 'UNKNOWN' }}</strong>
+                  <p>{{ (session.scenarioTags || []).slice(0, 4).join(' · ') || session.decodePath || 'No tags yet' }}</p>
+                </div>
+                <div class="benchmark-row-meta">
+                  <span :class="['benchmark-status', session.status]">{{ session.status }}</span>
+                  <span>{{ formatMs(session.lockMs) }} · {{ session.decodedFormat || session.decodeEngine || 'unknown' }}</span>
+                </div>
+              </div>
+            </div>
+            <p v-else class="benchmark-empty">No scanner sessions recorded on this device yet.</p>
+          </div>
+        </div>
       </div>
 
       <!-- 文件上传 -->
@@ -123,16 +235,22 @@
         <button
           v-for="candidate in roiAssistCandidates"
           :key="candidate.candidate_id || candidate.decoded_text"
-          class="multi-code-option"
+          :class="['multi-code-option', { recommended: candidate.selection_rank === 1 }]"
           @click="selectRoiCandidate(candidate)"
         >
           <span class="multi-code-type">{{ resolveRoiCandidateType(candidate) }}</span>
+          <span v-if="candidate.selection_rank === 1" class="multi-code-recommendation">
+            Recommended
+          </span>
           <span class="multi-code-main">{{ formatRoiCandidateTitle(candidate) }}</span>
           <span class="multi-code-subtitle">{{ formatRoiCandidateSubtitle(candidate) }}</span>
           <span v-if="shouldShowRoiCandidateRaw(candidate)" class="multi-code-raw">
             {{ formatRoiCandidateRaw(candidate) }}
           </span>
           <span class="multi-code-meta">{{ formatRoiCandidateMeta(candidate) }}</span>
+          <span v-if="formatRoiCandidateSelectionReason(candidate)" class="multi-code-selection-reason">
+            {{ formatRoiCandidateSelectionReason(candidate) }}
+          </span>
           <span v-if="formatRoiCandidatePrimary(candidate)" class="multi-code-primary">
             {{ formatRoiCandidatePrimary(candidate) }}
           </span>
@@ -552,6 +670,7 @@ import { useRouter } from 'vue-router'
 import {
   applyPreferredTrackConstraints,
   buildDecodeCandidatesFromVideo,
+  buildLinearDecodeCandidatesFromVideo,
   buildPreferredVideoConstraints,
   computeFrameMetrics,
   createEnhancedCodeReader,
@@ -583,6 +702,8 @@ const statusType = ref('info')
 const isVideoFrameReady = ref(false)
 const scanCapturePulse = ref(false)
 const scanCaptureMessage = ref('Code captured')
+const scanCaptureLocation = ref(null)
+const scanGuidanceMessage = ref('Please place the barcode inside the frame')
 const manualCode = ref('')
 const devices = ref([])
 const selectedDevice = ref(localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || '')
@@ -596,6 +717,11 @@ const ROI_ASSIST_JPEG_QUALITY = 0.72
 const ROI_ASSIST_AUTO_DELAY_MS = 3500
 const ROI_ASSIST_COOLDOWN_MS = 7000
 const ROI_ASSIST_TIMEOUT_MS = 15000
+const FRAME_STABILITY_SAMPLE_MS = 480
+const SCANNER_STATS_STORAGE_KEY = 'scannerPerformanceSessions'
+const SCANNER_SELECTION_STORAGE_KEY = 'scannerSelectionSamples'
+const MULTI_CODE_AUTO_SELECT_MIN_SCORE = 0.88
+const MULTI_CODE_AUTO_SELECT_MIN_MARGIN = 0.22
 const userRole = ref(localStorage.getItem('userRole') || 'operator')
 const isAdmin = userRole.value === 'admin'
 const SCAN_COOLDOWN_MS = 1200
@@ -621,6 +747,7 @@ const showMultiCodePicker = ref(false)
 let sharedAudioContext = null
 let removeAudioPrimeListeners = null
 let scanCapturePulseTimer = null
+let roiCandidateSightings = new Map()
 
 // 新建商品相关状态
 const showCreateItemModal = ref(false)
@@ -835,13 +962,106 @@ const clearScanCapturePulseTimer = () => {
   }
 }
 
+const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max)
+
+const normalizeCapturePoint = (point) => {
+  if (!point || typeof point !== 'object') return null
+  const x = Number(point.x ?? point[0])
+  const y = Number(point.y ?? point[1])
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  return { x, y }
+}
+
+const normalizeCapturePoints = (points) => {
+  if (!Array.isArray(points)) return []
+  return points.map(normalizeCapturePoint).filter(Boolean)
+}
+
+const getScanCaptureBounds = (location) => {
+  const points = normalizeCapturePoints(location?.points)
+  if (!points.length) return null
+
+  const xs = points.map((point) => point.x)
+  const ys = points.map((point) => point.y)
+  let minX = Math.min(...xs)
+  let maxX = Math.max(...xs)
+  let minY = Math.min(...ys)
+  let maxY = Math.max(...ys)
+
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null
+  if (maxX - minX <= 0 && maxY - minY <= 0) return null
+
+  const sourceWidth = Number(location?.imageWidth || location?.frameWidth || 0)
+  const sourceHeight = Number(location?.imageHeight || location?.frameHeight || 0)
+  const minSourceWidth = sourceWidth ? sourceWidth * 0.04 : 22
+  const minSourceHeight = sourceHeight ? sourceHeight * 0.04 : 22
+
+  if (maxX - minX < minSourceWidth) {
+    const expand = (minSourceWidth - (maxX - minX)) / 2
+    minX -= expand
+    maxX += expand
+  }
+
+  if (maxY - minY < minSourceHeight) {
+    const expand = (minSourceHeight - (maxY - minY)) / 2
+    minY -= expand
+    maxY += expand
+  }
+
+  return { minX, maxX, minY, maxY }
+}
+
+const scanCaptureOverlayStyle = computed(() => {
+  const location = scanCaptureLocation.value
+  const bounds = getScanCaptureBounds(location)
+  const video = videoRef.value
+  const stage = video?.parentElement
+  if (!bounds || !video || !stage) return null
+
+  const stageRect = stage.getBoundingClientRect()
+  if (!stageRect.width || !stageRect.height) return null
+
+  const sourceWidth = Number(location?.imageWidth || location?.frameWidth || video.videoWidth || 0)
+  const sourceHeight = Number(location?.imageHeight || location?.frameHeight || video.videoHeight || 0)
+  if (!sourceWidth || !sourceHeight) return null
+
+  const coverScale = Math.max(stageRect.width / sourceWidth, stageRect.height / sourceHeight)
+  const renderedWidth = sourceWidth * coverScale
+  const renderedHeight = sourceHeight * coverScale
+  const offsetX = (stageRect.width - renderedWidth) / 2
+  const offsetY = (stageRect.height - renderedHeight) / 2
+
+  let width = Math.max((bounds.maxX - bounds.minX) * coverScale, 44)
+  let height = Math.max((bounds.maxY - bounds.minY) * coverScale, 44)
+  let left = offsetX + (bounds.minX * coverScale)
+  let top = offsetY + (bounds.minY * coverScale)
+  const centerX = left + (width / 2)
+  const centerY = top + (height / 2)
+
+  width = Math.min(width, stageRect.width - 8)
+  height = Math.min(height, stageRect.height - 8)
+  left = clampNumber(centerX - (width / 2), 4, Math.max(stageRect.width - width - 4, 4))
+  top = clampNumber(centerY - (height / 2), 4, Math.max(stageRect.height - height - 4, 4))
+
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${width}px`,
+    height: `${height}px`
+  }
+})
+
+const hasPositionedScanCapture = computed(() => Boolean(scanCaptureOverlayStyle.value))
+
 const hideScanCapturePulse = () => {
   clearScanCapturePulseTimer()
   scanCapturePulse.value = false
+  scanCaptureLocation.value = null
 }
 
-const showScanCapturePulse = (message = 'Code captured') => {
+const showScanCapturePulse = (message = 'Code captured', location = null) => {
   scanCaptureMessage.value = message
+  scanCaptureLocation.value = location
   scanCapturePulse.value = false
   clearScanCapturePulseTimer()
 
@@ -850,8 +1070,173 @@ const showScanCapturePulse = (message = 'Code captured') => {
     scanCapturePulseTimer = window.setTimeout(() => {
       scanCapturePulse.value = false
       scanCapturePulseTimer = null
-    }, 920)
+    }, 1250)
   })
+}
+
+const loadLocalBenchmarkSessions = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SCANNER_STATS_STORAGE_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.slice(0, 40) : []
+  } catch (_error) {
+    return []
+  }
+}
+
+const saveLocalBenchmarkSession = (session) => {
+  const nextSessions = [session, ...loadLocalBenchmarkSessions()]
+    .filter(Boolean)
+    .slice(0, 40)
+  localBenchmarkSessions.value = nextSessions
+  localStorage.setItem(SCANNER_STATS_STORAGE_KEY, JSON.stringify(nextSessions))
+}
+
+const clearLocalBenchmarkSessions = () => {
+  localBenchmarkSessions.value = []
+  localStorage.removeItem(SCANNER_STATS_STORAGE_KEY)
+}
+
+const averageOf = (values) => {
+  const finiteValues = values.map(Number).filter(Number.isFinite)
+  if (!finiteValues.length) return null
+  return finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length
+}
+
+const benchmarkStats = computed(() => {
+  const sessions = localBenchmarkSessions.value || []
+  const total = sessions.length
+  const successSessions = sessions.filter((session) => session.status === 'success')
+  const oneDimSessions = sessions.filter((session) => (session.scenarioTags || []).includes('one-dimensional'))
+  const roiAssistSessions = sessions.filter((session) => String(session.mode || '').includes('roi') || String(session.decodePath || '').includes('roi'))
+
+  return {
+    total,
+    successRate: total ? successSessions.length / total : 0,
+    avgLockMs: averageOf(successSessions.map((session) => session.lockMs)),
+    avgFirstFrameMs: averageOf(sessions.map((session) => session.firstFrameMs)),
+    oneDimCount: oneDimSessions.length,
+    roiAssistCount: roiAssistSessions.length
+  }
+})
+
+const formatMs = (value) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return 'n/a'
+  if (numericValue >= 1000) return `${(numericValue / 1000).toFixed(1)}s`
+  return `${Math.round(numericValue)}ms`
+}
+
+const formatPercent = (value) => `${Math.round(Number(value || 0) * 100)}%`
+
+const formatScore = (value) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return 'n/a'
+  return numericValue.toFixed(2)
+}
+
+const extractDownloadFilename = (contentDisposition, fallback) => {
+  const disposition = String(contentDisposition || '')
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1])
+    } catch (_error) {
+      return utf8Match[1]
+    }
+  }
+
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i)
+  return plainMatch?.[1] || fallback
+}
+
+const fetchRankingSummary = async () => {
+  if (!isAdmin || isLoadingRankingSummary.value) return
+
+  const token = localStorage.getItem('token')
+  if (!token) {
+    handleAuthFailure()
+    return
+  }
+
+  isLoadingRankingSummary.value = true
+  rankingExportStatus.value = 'Refreshing ranking training summary...'
+
+  try {
+    const response = await fetch('/api/scanner/roi-assist/ranking-summary', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    const payload = await response.json().catch(() => ({}))
+
+    if (!response.ok) {
+      const message = payload.message || payload.error || 'Failed to refresh ranking summary'
+      if (isAuthFailure(response.status, message)) {
+        handleAuthFailure(message)
+        return
+      }
+      throw new Error(message)
+    }
+
+    rankingSummary.value = payload.summary || null
+    rankingExportStatus.value = 'Ranking summary refreshed.'
+  } catch (error) {
+    rankingExportStatus.value = error.message || 'Failed to refresh ranking summary'
+  } finally {
+    isLoadingRankingSummary.value = false
+  }
+}
+
+const downloadRankingTrainingCsv = async () => {
+  if (!isAdmin || isExportingRankingCsv.value) return
+
+  const token = localStorage.getItem('token')
+  if (!token) {
+    handleAuthFailure()
+    return
+  }
+
+  isExportingRankingCsv.value = true
+  rankingExportStatus.value = 'Preparing ranking training CSV...'
+
+  try {
+    const response = await fetch('/api/scanner/roi-assist/ranking-export', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      const message = payload.message || payload.error || 'Failed to export ranking CSV'
+      if (isAuthFailure(response.status, message)) {
+        handleAuthFailure(message)
+        return
+      }
+      throw new Error(message)
+    }
+
+    const blob = await response.blob()
+    const filename = extractDownloadFilename(
+      response.headers.get('content-disposition'),
+      `scanner-ranking-training-${Date.now()}.csv`
+    )
+    const downloadUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(downloadUrl)
+
+    rankingExportStatus.value = `Downloaded ${filename}`
+    void fetchRankingSummary()
+  } catch (error) {
+    rankingExportStatus.value = error.message || 'Failed to export ranking CSV'
+  } finally {
+    isExportingRankingCsv.value = false
+  }
 }
 
 const clearAuthSession = () => {
@@ -1482,11 +1867,78 @@ const finalizeBenchmarkSession = ({ status, labelType = 'UNKNOWN', rawData = '' 
   }
 
   activeBenchmarkSession.value = null
+  saveLocalBenchmarkSession(completedSession)
   void postBenchmarkSession(completedSession)
 
   if (isScanning.value) {
     beginBenchmarkSession('camera')
   }
+}
+
+const updateScanGuidance = (metrics) => {
+  const now = performance.now()
+  if (now - lastGuidanceUpdateAt < 680) return
+  lastGuidanceUpdateAt = now
+
+  if (scanCapturePulse.value) return
+  if (isRoiAssistRunning.value) {
+    scanGuidanceMessage.value = 'Enhanced scan is checking this frame...'
+    return
+  }
+
+  if (!metrics) {
+    scanGuidanceMessage.value = 'Please place the barcode inside the frame'
+    return
+  }
+
+  if (decodeMissStreak >= 24) {
+    scanGuidanceMessage.value = 'Move closer or use ROI Assist'
+  } else if (metrics.lowLight) {
+    scanGuidanceMessage.value = 'Too dark - turn on light or move closer'
+  } else if (metrics.blurry) {
+    scanGuidanceMessage.value = 'Hold steady for a sharper frame'
+  } else if (decodeMissStreak >= 12) {
+    scanGuidanceMessage.value = 'Center the code and hold steady'
+  } else {
+    scanGuidanceMessage.value = 'Please place the barcode inside the frame'
+  }
+}
+
+const isFrameStableForAssist = (video) => {
+  const now = performance.now()
+  if (now - lastStabilitySampleAt < FRAME_STABILITY_SAMPLE_MS) {
+    return false
+  }
+  lastStabilitySampleAt = now
+
+  const canvas = scanCanvasCache.stabilityCanvas || document.createElement('canvas')
+  scanCanvasCache.stabilityCanvas = canvas
+  canvas.width = 64
+  canvas.height = 48
+
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) return true
+
+  context.drawImage(video, 0, 0, canvas.width, canvas.height)
+  const data = context.getImageData(0, 0, canvas.width, canvas.height).data
+  const currentFrame = new Uint8ClampedArray(canvas.width * canvas.height)
+
+  for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
+    currentFrame[pixel] = Math.round((data[index] * 0.299) + (data[index + 1] * 0.587) + (data[index + 2] * 0.114))
+  }
+
+  if (!previousStabilityFrame || previousStabilityFrame.length !== currentFrame.length) {
+    previousStabilityFrame = currentFrame
+    return false
+  }
+
+  let diffTotal = 0
+  for (let index = 0; index < currentFrame.length; index += 1) {
+    diffTotal += Math.abs(currentFrame[index] - previousStabilityFrame[index])
+  }
+  previousStabilityFrame = currentFrame
+
+  return (diffTotal / currentFrame.length) < 14
 }
 
 const decodeCurrentVideoFrame = (video) => {
@@ -1521,6 +1973,23 @@ const decodeCurrentVideoFrame = (video) => {
       })
 
       decoded = decodeFromCandidates(reader, mediumCandidates)
+    }
+  }
+
+  if (!decoded?.text) {
+    const shouldUseLinearAssist =
+      decodeMissStreak >= 3 ||
+      metrics.blurry ||
+      metrics.lowLight
+
+    if (shouldUseLinearAssist) {
+      const linearCandidates = buildLinearDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+        includeEnhancedAssist: true,
+        includeBinaryAssist: decodeMissStreak >= 5 || metrics.lowLight,
+        includeTiltAssist: decodeMissStreak >= 5 || metrics.blurry
+      })
+
+      decoded = decodeFromCandidates(reader, linearCandidates)
     }
   }
 
@@ -1594,12 +2063,14 @@ const runEnhancedScanLoop = () => {
   }
   const frameMetrics = getAdaptiveFrameMetrics(video)
   captureBenchmarkFrame(frameMetrics)
+  updateScanGuidance(frameMetrics)
 
   const decoded = decodeCurrentVideoFrame(video)
   if (!decoded?.text) return
 
   void handleScanResult(decoded.text, {
-    sourceMode: 'camera'
+    sourceMode: 'camera',
+    captureLocation: decoded.location || null
   })
 }
 
@@ -1626,6 +2097,16 @@ let scannerWorkerGeneration = 0
 let roiAssistEligibleAt = 0
 let lastRoiAssistAt = 0
 let roiAssistStatusTimer = null
+let lastGuidanceUpdateAt = 0
+let lastStabilitySampleAt = 0
+let previousStabilityFrame = null
+
+const showBenchmarkPanel = ref(false)
+const localBenchmarkSessions = ref(loadLocalBenchmarkSessions())
+const rankingSummary = ref(null)
+const isLoadingRankingSummary = ref(false)
+const isExportingRankingCsv = ref(false)
+const rankingExportStatus = ref('')
 
 const FAST_REOPEN_WINDOW_MS = 12000
 
@@ -1784,6 +2265,33 @@ const normalizeRoiCandidate = (candidate, index = 0) => {
   }
 }
 
+const buildLocationFromRoiCandidate = (candidate) => {
+  const points = normalizeCapturePoints(candidate?.points || candidate?.detection?.points)
+  const imageWidth = Number(
+    candidate?.image_width ||
+    candidate?.imageWidth ||
+    candidate?.frameWidth ||
+    candidate?.source_width ||
+    0
+  )
+  const imageHeight = Number(
+    candidate?.image_height ||
+    candidate?.imageHeight ||
+    candidate?.frameHeight ||
+    candidate?.source_height ||
+    0
+  )
+
+  if (!points.length || !imageWidth || !imageHeight) return null
+
+  return {
+    source: 'roi-assist',
+    points,
+    imageWidth,
+    imageHeight
+  }
+}
+
 const collectSuccessfulRoiCandidates = (payload) => {
   const rawCandidates = Array.isArray(payload?.candidates) ? payload.candidates : []
   const normalized = rawCandidates
@@ -1839,9 +2347,282 @@ const resolveRoiCandidateType = (candidate) => {
   return 'CODE'
 }
 
+const normalizeRoiCandidateType = (candidate) => {
+  const displayType = String(candidate?.display?.entityType || '').trim().toUpperCase()
+  if (displayType) return displayType.replace(/\s+/g, '_')
+  return String(resolveRoiCandidateType(candidate) || 'CODE').trim().toUpperCase().replace(/\s+/g, '_')
+}
+
+const clampScore = (value, fallback = 0) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return fallback
+  return Math.min(Math.max(numericValue, 0), 1)
+}
+
+const getRoiOperationContext = () => String(scanAction.value || 'SCAN').trim().toUpperCase()
+
+const typeMatchScoreByContext = (type, operationContext) => {
+  const normalizedType = String(type || 'CODE').toUpperCase()
+  const normalizedContext = String(operationContext || 'SCAN').toUpperCase()
+
+  const matrix = {
+    OUTBOUND: { LOT: 1, ITEM: 0.82, BARCODE: 0.7, QR: 0.68, BIN: 0.22, CODE: 0.35 },
+    MOVE: { LOT: 1, ITEM: 0.72, BARCODE: 0.58, QR: 0.56, BIN: 0.28, CODE: 0.32 },
+    INBOUND: { ITEM: 1, BARCODE: 0.86, QR: 0.78, LOT: 0.62, BIN: 0.4, CODE: 0.48 },
+    COUNT: { LOT: 1, ITEM: 0.92, BIN: 0.86, BARCODE: 0.8, QR: 0.78, CODE: 0.45 },
+    CREATE_ITEM: { ITEM: 0.95, BARCODE: 0.88, QR: 0.72, CODE: 0.62, LOT: 0.3, BIN: 0.25 },
+    SCAN: { LOT: 0.88, ITEM: 0.86, BIN: 0.76, BARCODE: 0.72, QR: 0.7, CODE: 0.45 }
+  }
+
+  const contextScores = matrix[normalizedContext] || matrix.SCAN
+  return contextScores[normalizedType] ?? contextScores.CODE ?? 0.45
+}
+
+const getCandidateSightingScore = (candidate) => {
+  const key = extractRoiDecodedText(candidate)
+  if (!key) return 0.35
+
+  const now = Date.now()
+  const previous = roiCandidateSightings.get(key)
+  const count = previous && now - previous.lastSeenAt < 12000 ? previous.count + 1 : 1
+  roiCandidateSightings.set(key, { count, lastSeenAt: now })
+  return clampScore(0.34 + (Math.min(count, 4) * 0.16), 0.5)
+}
+
+const getRoiCandidateRiskPenalty = (candidate, type) => {
+  const raw = extractRoiDecodedText(candidate)
+  let penalty = 0
+
+  if (!raw) penalty += 0.55
+  if (raw && raw.length < 4) penalty += 0.32
+  if ([...raw].some((character) => character.charCodeAt(0) <= 31)) penalty += 0.3
+  if (raw && !/^[\w\s\-:{}[\]",.;:/]+$/u.test(raw)) penalty += 0.22
+  if (type === 'CODE' && candidate?.display?.found === false) penalty += 0.18
+  if (String(raw).includes('$') || String(raw).includes('�')) penalty += 0.28
+
+  return clampScore(penalty)
+}
+
+const explainRoiSelection = (parts, riskPenalty, type, displayFound) => {
+  const reasons = []
+
+  if (parts.type >= 0.85) reasons.push(`${type} fits this action`)
+  if (parts.center >= 0.78) reasons.push('near scan center')
+  if (parts.database >= 0.9) reasons.push('matched warehouse data')
+  if (parts.quality >= 0.72) reasons.push('clear ROI')
+  if (parts.feedback >= 0.28) reasons.push('selected before')
+  if (parts.confidence >= 0.82) reasons.push('high detect confidence')
+  if (displayFound === false) reasons.push('not in master data')
+  if (riskPenalty >= 0.22) reasons.push('possible noisy decode')
+
+  return reasons.slice(0, 4)
+}
+
+const scoreRoiCandidateForSelection = (candidate, index = 0, operationContext = getRoiOperationContext()) => {
+  const type = normalizeRoiCandidateType(candidate)
+  const centerScore = Number.isFinite(Number(candidate?.center_distance_ratio))
+    ? clampScore(1 - Number(candidate.center_distance_ratio))
+    : 0.52
+  const confidenceScore = clampScore(candidate?.confidence, candidate?.confidence == null ? 0.55 : 0)
+  const roiScore = clampScore(candidate?.score, 0.5)
+  const qualityScore = clampScore(candidate?.quality_score, 0.55)
+  const areaScore = Number.isFinite(Number(candidate?.detection_area_ratio))
+    ? clampScore(Math.sqrt(Math.max(Number(candidate.detection_area_ratio), 0)) * 4)
+    : 0.45
+  const displayFound = candidate?.display?.found
+  const databaseScore = displayFound === true ? 1 : displayFound === false ? 0.2 : 0.55
+  const typeScore = typeMatchScoreByContext(type, operationContext)
+  const stabilityScore = getCandidateSightingScore(candidate)
+  const feedbackScore = clampScore(candidate?.feedback_score, 0)
+  const riskPenalty = getRoiCandidateRiskPenalty(candidate, type)
+
+  const parts = {
+    type: typeScore,
+    center: centerScore,
+    confidence: confidenceScore,
+    quality: (qualityScore * 0.64) + (areaScore * 0.36),
+    database: databaseScore,
+    stability: stabilityScore,
+    roi: roiScore,
+    feedback: feedbackScore
+  }
+
+  const baseWeightedScore = (
+    parts.type * 0.28 +
+    parts.center * 0.22 +
+    parts.database * 0.18 +
+    parts.quality * 0.14 +
+    parts.confidence * 0.1 +
+    parts.stability * 0.05 +
+    parts.roi * 0.03
+  )
+  const weightedScore = (baseWeightedScore * 0.92) + (parts.feedback * 0.08)
+  const selectionScore = clampScore(weightedScore - (riskPenalty * 0.32))
+
+  return {
+    ...candidate,
+    selection_type: type,
+    selection_score: Number(selectionScore.toFixed(4)),
+    selection_score_percent: Math.round(selectionScore * 100),
+    selection_risk_penalty: Number(riskPenalty.toFixed(4)),
+    selection_features: {
+      operation_context: operationContext,
+      type_score: Number(parts.type.toFixed(4)),
+      center_score: Number(parts.center.toFixed(4)),
+      database_score: Number(parts.database.toFixed(4)),
+      quality_score: Number(parts.quality.toFixed(4)),
+      confidence_score: Number(parts.confidence.toFixed(4)),
+      stability_score: Number(parts.stability.toFixed(4)),
+      roi_score: Number(parts.roi.toFixed(4)),
+      feedback_score: Number(parts.feedback.toFixed(4)),
+      risk_penalty: Number(riskPenalty.toFixed(4)),
+      original_index: index
+    },
+    selection_reasons: explainRoiSelection(parts, riskPenalty, type, displayFound)
+  }
+}
+
+const rankRoiCandidatesForSelection = (candidates, operationContext = getRoiOperationContext()) => {
+  return [...candidates]
+    .map((candidate, index) => scoreRoiCandidateForSelection(candidate, index, operationContext))
+    .sort((left, right) => {
+      const scoreDiff = Number(right.selection_score || 0) - Number(left.selection_score || 0)
+      if (Math.abs(scoreDiff) > 0.0001) return scoreDiff
+      return Number(right.score || 0) - Number(left.score || 0)
+    })
+    .map((candidate, index, sortedCandidates) => ({
+      ...candidate,
+      selection_rank: index + 1,
+      selection_score_margin: index === 0 && sortedCandidates[1]
+        ? Number((Number(candidate.selection_score || 0) - Number(sortedCandidates[1].selection_score || 0)).toFixed(4))
+        : null
+    }))
+}
+
+const shouldAutoSelectRoiCandidate = (candidates) => {
+  if (!Array.isArray(candidates) || candidates.length < 2) return false
+  const [topCandidate, secondCandidate] = candidates
+  const topScore = Number(topCandidate?.selection_score || 0)
+  const secondScore = Number(secondCandidate?.selection_score || 0)
+  const scoreMargin = topScore - secondScore
+
+  return topScore >= MULTI_CODE_AUTO_SELECT_MIN_SCORE &&
+    scoreMargin >= MULTI_CODE_AUTO_SELECT_MIN_MARGIN &&
+    topCandidate?.display?.found !== false &&
+    Number(topCandidate?.selection_risk_penalty || 0) < 0.22
+}
+
+const sanitizeRoiSelectionCandidate = (candidate) => ({
+  candidate_id: candidate?.candidate_id || '',
+  decoded_text: extractRoiDecodedText(candidate),
+  decoded_types: candidate?.decoded_types || [],
+  class_name: candidate?.class_name || '',
+  selection_type: candidate?.selection_type || normalizeRoiCandidateType(candidate),
+  selection_score: candidate?.selection_score ?? null,
+  selection_score_percent: candidate?.selection_score_percent ?? null,
+  selection_rank: candidate?.selection_rank ?? null,
+  selection_score_margin: candidate?.selection_score_margin ?? null,
+  selection_risk_penalty: candidate?.selection_risk_penalty ?? null,
+  selection_features: candidate?.selection_features || {},
+  selection_reasons: candidate?.selection_reasons || [],
+  confidence: candidate?.confidence ?? null,
+  score: candidate?.score ?? null,
+  center_distance_ratio: candidate?.center_distance_ratio ?? null,
+  detection_area_ratio: candidate?.detection_area_ratio ?? null,
+  quality_score: candidate?.quality_score ?? null,
+  feedback_score: candidate?.feedback_score ?? null,
+  feedback_signal: candidate?.feedback_signal || null,
+  best_preprocessing_mode: candidate?.best_preprocessing_mode || '',
+  points: candidate?.points || candidate?.detection?.points || [],
+  detection: candidate?.detection || null,
+  image_width: candidate?.image_width ?? candidate?.imageWidth ?? candidate?.frameWidth ?? candidate?.source_width ?? null,
+  image_height: candidate?.image_height ?? candidate?.imageHeight ?? candidate?.frameHeight ?? candidate?.source_height ?? null,
+  imageWidth: candidate?.imageWidth ?? null,
+  imageHeight: candidate?.imageHeight ?? null,
+  frameWidth: candidate?.frameWidth ?? null,
+  frameHeight: candidate?.frameHeight ?? null,
+  source_width: candidate?.source_width ?? null,
+  source_height: candidate?.source_height ?? null,
+  display: candidate?.display || null
+})
+
+const inferClientDeviceType = () => {
+  const ua = window.navigator.userAgent || ''
+  if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad'
+  if (/iPhone/i.test(ua)) return 'iPhone'
+  if (/Android/i.test(ua)) return 'Android'
+  if (/Mobile/i.test(ua)) return 'Mobile'
+  return 'Desktop'
+}
+
+const loadLocalSelectionSamples = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SCANNER_SELECTION_STORAGE_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.slice(0, 80) : []
+  } catch (_error) {
+    return []
+  }
+}
+
+const saveLocalSelectionSample = (sample) => {
+  const nextSamples = [sample, ...loadLocalSelectionSamples()]
+    .filter(Boolean)
+    .slice(0, 80)
+  localStorage.setItem(SCANNER_SELECTION_STORAGE_KEY, JSON.stringify(nextSamples))
+}
+
+const recordRoiSelectionFeedback = async ({
+  selectedCandidate = null,
+  candidates = [],
+  trigger = 'manual',
+  decisionType = 'user_selected'
+} = {}) => {
+  if (!Array.isArray(candidates) || !candidates.length) return
+
+  const now = new Date()
+  const activeSession = activeBenchmarkSession.value
+  const sample = {
+    session_id: activeSession?.id || `selection-${Date.now()}`,
+    trigger,
+    operation_context: getRoiOperationContext(),
+    device_type: inferClientDeviceType(),
+    started_at: activeSession?.startedAt || now.toISOString(),
+    confirmed_at: now.toISOString(),
+    confirmation_time_ms: activeSession?.startPerf
+      ? Math.round(performance.now() - activeSession.startPerf)
+      : null,
+    selected_candidate_id: selectedCandidate?.candidate_id || null,
+    decision_type: decisionType,
+    candidates: candidates.map(sanitizeRoiSelectionCandidate),
+    created_at: now.toISOString()
+  }
+
+  saveLocalSelectionSample(sample)
+
+  const token = localStorage.getItem('token')
+  if (!token) return
+
+  try {
+    await fetch('/api/scanner/roi-assist/selection-feedback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(sample),
+      keepalive: true
+    })
+  } catch (error) {
+    console.warn('[ROI Assist] selection feedback save failed', error)
+  }
+}
+
 const formatRoiCandidateMeta = (candidate) => {
   const display = candidate?.display || {}
   const pieces = []
+  if (Number.isFinite(candidate?.selection_score_percent)) {
+    pieces.push(`${candidate.selection_score_percent}% selection`)
+  }
   const className = display.entityType || (candidate?.class_name ? String(candidate.class_name).replaceAll('_', ' ') : '')
   if (className) pieces.push(className)
   if (Number.isFinite(candidate?.confidence)) {
@@ -1854,10 +2635,18 @@ const formatRoiCandidateMeta = (candidate) => {
     const centerScore = Math.max(0, Math.min(1, 1 - candidate.center_distance_ratio))
     pieces.push(`${Math.round(centerScore * 100)}% centered`)
   }
+  if (Number(candidate?.feedback_signal?.shown_count || 0) > 0) {
+    pieces.push(`${candidate.feedback_signal.selected_count || 0}/${candidate.feedback_signal.shown_count} selected`)
+  }
   if (candidate?.best_preprocessing_mode) {
     pieces.push(candidate.best_preprocessing_mode)
   }
   return pieces.join(' · ') || 'ROI Assist candidate'
+}
+
+const formatRoiCandidateSelectionReason = (candidate) => {
+  const reasons = Array.isArray(candidate?.selection_reasons) ? candidate.selection_reasons : []
+  return reasons.length ? reasons.join(' · ') : ''
 }
 
 const formatRoiCandidateTitle = (candidate) => {
@@ -1919,6 +2708,7 @@ const enrichRoiCandidates = async (candidates) => {
         'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
+        operation_context: getRoiOperationContext(),
         candidates: candidates.map((candidate) => ({
           candidate_id: candidate.candidate_id,
           decoded_text: candidate.decoded_text,
@@ -1932,7 +2722,15 @@ const enrichRoiCandidates = async (candidates) => {
           detection_area_ratio: candidate.detection_area_ratio,
           quality_score: candidate.quality_score,
           best_preprocessing_mode: candidate.best_preprocessing_mode,
-          source: candidate.source
+          source: candidate.source,
+          points: candidate.points,
+          detection: candidate.detection,
+          image_width: candidate.image_width,
+          image_height: candidate.image_height,
+          imageWidth: candidate.imageWidth,
+          imageHeight: candidate.imageHeight,
+          frameWidth: candidate.frameWidth,
+          frameHeight: candidate.frameHeight
         }))
       })
     })
@@ -1955,8 +2753,15 @@ const enrichRoiCandidates = async (candidates) => {
 }
 
 const dismissMultiCodePicker = () => {
+  const currentCandidates = [...roiAssistCandidates.value]
   showMultiCodePicker.value = false
   roiAssistCandidates.value = []
+  void recordRoiSelectionFeedback({
+    selectedCandidate: null,
+    candidates: currentCandidates,
+    trigger: 'manual',
+    decisionType: 'dismissed'
+  })
   setRoiAssistStatus('Selection cancelled. Keep scanning when ready.', { autoClearMs: 1800 })
   resetRoiAssistAutoTimer()
   resumeOutboundLiveDecoding()
@@ -1967,21 +2772,61 @@ const selectRoiCandidate = async (candidate) => {
   if (!decodedText) return
 
   showMultiCodePicker.value = false
+  const currentCandidates = [...roiAssistCandidates.value]
   roiAssistCandidates.value = []
   setRoiAssistStatus('Target label selected.', { autoClearMs: 1400 })
+  void recordRoiSelectionFeedback({
+    selectedCandidate: candidate,
+    candidates: currentCandidates.length ? currentCandidates : [candidate],
+    trigger: 'manual',
+    decisionType: 'user_selected'
+  })
+  captureBenchmarkDecode({
+    label: 'roi-assist-selected',
+    format: candidate?.decoded_types?.[0] || candidate?.class_name || '',
+    engine: 'ROI Assist'
+  })
   await handleScanResult(decodedText, {
     bypassCooldown: true,
-    sourceMode: 'roi-assist'
+    sourceMode: 'roi-assist',
+    captureLocation: buildLocationFromRoiCandidate(candidate)
   })
 }
 
 const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
-  const candidates = await enrichRoiCandidates(collectSuccessfulRoiCandidates(payload))
+  const enrichedCandidates = await enrichRoiCandidates(collectSuccessfulRoiCandidates(payload))
+  const candidates = rankRoiCandidatesForSelection(
+    enrichedCandidates,
+    String(payload?.operation_context || getRoiOperationContext() || 'SCAN').toUpperCase()
+  )
+  const leadingLocation = buildLocationFromRoiCandidate(candidates[0])
 
   if (candidates.length > 1) {
+    if (shouldAutoSelectRoiCandidate(candidates)) {
+      const candidate = candidates[0]
+      void recordRoiSelectionFeedback({
+        selectedCandidate: candidate,
+        candidates,
+        trigger,
+        decisionType: 'auto_selected'
+      })
+      setRoiAssistStatus('Best label selected automatically.', { autoClearMs: 1800 })
+      captureBenchmarkDecode({
+        label: 'roi-assist-auto-selected',
+        format: candidate?.decoded_types?.[0] || candidate?.class_name || '',
+        engine: 'ROI Assist'
+      })
+      await handleScanResult(candidate.decoded_text, {
+        bypassCooldown: true,
+        sourceMode: 'roi-assist',
+        captureLocation: buildLocationFromRoiCandidate(candidate)
+      })
+      return
+    }
+
     roiAssistCandidates.value = candidates
     showMultiCodePicker.value = true
-    showScanCapturePulse('Labels found')
+    showScanCapturePulse('Labels found', leadingLocation)
     setRoiAssistStatus(`${candidates.length} labels found. Choose the target label.`, { autoClearMs: 2400 })
     stopScanLoop()
     if (videoRef.value && !videoRef.value.paused) {
@@ -1996,14 +2841,21 @@ const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
       trigger === 'auto' ? 'Enhanced scan found a label.' : 'ROI Assist found a label.',
       { autoClearMs: 1800 }
     )
+    captureBenchmarkDecode({
+      label: 'roi-assist',
+      format: candidate?.decoded_types?.[0] || candidate?.class_name || '',
+      engine: 'ROI Assist'
+    })
     await handleScanResult(candidate.decoded_text, {
       bypassCooldown: true,
-      sourceMode: 'roi-assist'
+      sourceMode: 'roi-assist',
+      captureLocation: buildLocationFromRoiCandidate(candidate)
     })
     return
   }
 
   setRoiAssistStatus('Move closer or hold steady.', { autoClearMs: 2200 })
+  scanGuidanceMessage.value = 'Move closer or hold steady'
 }
 
 const triggerRoiAssist = async (trigger = 'manual') => {
@@ -2013,6 +2865,9 @@ const triggerRoiAssist = async (trigger = 'manual') => {
   isRoiAssistRunning.value = true
   lastRoiAssistAt = Date.now()
   setRoiAssistStatus(trigger === 'auto' ? 'Trying enhanced scan...' : 'Running ROI Assist...')
+  scanGuidanceMessage.value = trigger === 'auto'
+    ? 'Enhanced scan is checking this frame...'
+    : 'ROI Assist is checking this frame...'
 
   try {
     const frameBlob = await captureVideoFrameAsJpeg(videoRef.value)
@@ -2068,6 +2923,11 @@ const maybeTriggerAutoRoiAssist = (video) => {
   if (Date.now() < roiAssistEligibleAt) return
   if (Date.now() - lastRoiAssistAt < ROI_ASSIST_COOLDOWN_MS) return
   if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
+  if (decodeMissStreak < 8) return
+  if (!isFrameStableForAssist(video)) {
+    scanGuidanceMessage.value = 'Hold steady for enhanced scan'
+    return
+  }
 
   void triggerRoiAssist('auto')
 }
@@ -2103,6 +2963,7 @@ const handleScannerWorkerMessage = (event) => {
     cachedFrameMetrics = payload.metrics
     lastFrameMetricsAt = performance.now()
     captureBenchmarkFrame(payload.metrics)
+    updateScanGuidance(payload.metrics)
   }
 
   if (payload.decodedText) {
@@ -2114,7 +2975,8 @@ const handleScannerWorkerMessage = (event) => {
       fillRatio: payload.fillRatio
     })
     void handleScanResult(payload.decodedText, {
-      sourceMode: 'camera'
+      sourceMode: 'camera',
+      captureLocation: payload.location || null
     })
     return
   }
@@ -2731,6 +3593,10 @@ const startScanning = async () => {
     decodeMissStreak = 0
     cachedFrameMetrics = null
     lastFrameMetricsAt = 0
+    lastGuidanceUpdateAt = 0
+    lastStabilitySampleAt = 0
+    previousStabilityFrame = null
+    scanGuidanceMessage.value = 'Please place the barcode inside the frame'
     resetScannerWorkerState()
     resetRoiAssistAutoTimer()
     beginBenchmarkSession('camera')
@@ -2832,6 +3698,10 @@ const stopScanning = async ({ forceRelease = false } = {}) => {
   decodeMissStreak = 0
   cachedFrameMetrics = null
   lastFrameMetricsAt = 0
+  lastGuidanceUpdateAt = 0
+  lastStabilitySampleAt = 0
+  previousStabilityFrame = null
+  scanGuidanceMessage.value = 'Please place the barcode inside the frame'
   resetScannerWorkerState()
   resetRoiAssistAutoTimer()
   clearVideoReadyTimer()
@@ -3077,7 +3947,7 @@ const handleManualSubmit = () => {
 
 // 处理扫描结果
 const handleScanResult = async (rawData, options = {}) => {
-  const { bypassCooldown = false, silent = false } = options
+  const { bypassCooldown = false, silent = false, captureLocation = null } = options
   const normalizedRaw = String(rawData || '').trim()
 
   if (!normalizedRaw) return
@@ -3088,7 +3958,7 @@ const handleScanResult = async (rawData, options = {}) => {
   lastProcessedScan.value = normalizedRaw
   lastProcessedAt.value = Date.now()
   if (!silent) {
-    showScanCapturePulse('Code captured')
+    showScanCapturePulse('Code captured', captureLocation)
   }
 
   try {
@@ -3787,6 +4657,86 @@ const playActionSuccessSound = () => {
   filter: drop-shadow(0 0 10px rgba(134, 239, 172, 0.72));
 }
 
+.scan-code-lock {
+  position: absolute;
+  pointer-events: none;
+  z-index: 4;
+  border: 1px solid rgba(187, 247, 208, 0.88);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.14), rgba(16, 185, 129, 0.02) 64%),
+    rgba(2, 44, 34, 0.14);
+  box-shadow:
+    0 0 0 999px rgba(16, 185, 129, 0.025),
+    0 18px 42px rgba(5, 150, 105, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: scanCodeLockIn 0.92s cubic-bezier(0.2, 0.9, 0.22, 1) both;
+}
+
+.scan-code-lock-corner {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 4px solid #34d399;
+  filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.8));
+}
+
+.scan-code-lock-top-left {
+  top: -4px;
+  left: -4px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.scan-code-lock-top-right {
+  top: -4px;
+  right: -4px;
+  border-left: none;
+  border-bottom: none;
+}
+
+.scan-code-lock-bottom-left {
+  bottom: -4px;
+  left: -4px;
+  border-right: none;
+  border-top: none;
+}
+
+.scan-code-lock-bottom-right {
+  right: -4px;
+  bottom: -4px;
+  border-left: none;
+  border-top: none;
+}
+
+.scan-code-lock-dot {
+  position: absolute;
+  right: -9px;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #34d399;
+  border: 3px solid rgba(236, 253, 245, 0.96);
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.72);
+  animation: scanCaptureDot 0.92s ease-out infinite;
+}
+
+.scan-code-lock-label {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(236, 253, 245, 0.92);
+  color: #065f46;
+  font-size: 0.78rem;
+  font-weight: 800;
+  box-shadow: 0 8px 20px rgba(4, 120, 87, 0.2);
+}
+
 @keyframes scanCaptureDot {
   0% {
     box-shadow: 0 0 0 0 rgba(187, 247, 208, 0.72);
@@ -3796,6 +4746,21 @@ const playActionSuccessSound = () => {
   }
   100% {
     box-shadow: 0 0 0 0 rgba(187, 247, 208, 0);
+  }
+}
+
+@keyframes scanCodeLockIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  24% {
+    opacity: 1;
+    transform: scale(1.035);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
@@ -4436,6 +5401,16 @@ const playActionSuccessSound = () => {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
+.multi-code-option.recommended {
+  border-color: rgba(16, 185, 129, 0.38);
+  background:
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.12), transparent 42%),
+    rgba(255, 255, 255, 0.82);
+  box-shadow:
+    0 12px 28px rgba(16, 185, 129, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
 .multi-code-option:hover {
   border-color: rgba(59, 130, 246, 0.36);
   background: rgba(239, 246, 255, 0.86);
@@ -4451,6 +5426,19 @@ const playActionSuccessSound = () => {
   font-size: 0.74rem;
   font-weight: 800;
   letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.multi-code-recommendation {
+  display: inline-flex;
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -4478,6 +5466,13 @@ const playActionSuccessSound = () => {
 .multi-code-meta {
   color: #64748b;
   font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.multi-code-selection-reason {
+  color: #2563eb;
+  font-size: 0.78rem;
+  font-weight: 800;
   line-height: 1.35;
 }
 
@@ -5099,11 +6094,15 @@ const playActionSuccessSound = () => {
   touch-action: manipulation;
 }
 
-.camera-container-suspended .camera-video,
+.camera-container-suspended:not(.camera-container-capture-visible) .camera-video,
 .camera-container-suspended .camera-stage-placeholder,
-.camera-container-suspended .scan-overlay,
+.camera-container-suspended:not(.camera-container-capture-visible) .scan-overlay,
 .camera-container-suspended .camera-controls {
   visibility: hidden;
+}
+
+.camera-container-suspended.camera-container-capture-visible .scan-overlay {
+  visibility: visible;
 }
 
 .btn-cancel {
@@ -5285,6 +6284,48 @@ const playActionSuccessSound = () => {
   cursor: not-allowed;
 }
 
+.ranking-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 0.88), rgba(255, 255, 255, 0.92)),
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.14), transparent 34%);
+}
+
+.ranking-summary-card {
+  padding: 12px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.ranking-summary-card span {
+  display: block;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ranking-summary-card strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 1.05rem;
+}
+
+.ranking-export-status {
+  margin: 10px 0 0;
+  color: #475569;
+  font-size: 0.86rem;
+}
+
 .benchmark-recent {
   margin-top: 16px;
 }
@@ -5353,7 +6394,8 @@ const playActionSuccessSound = () => {
 }
 
 @media (max-width: 768px) {
-  .benchmark-grid {
+  .benchmark-grid,
+  .ranking-summary {
     grid-template-columns: 1fr;
   }
 
