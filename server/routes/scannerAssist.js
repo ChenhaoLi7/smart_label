@@ -6,6 +6,10 @@ const { Op, fn, col, literal } = require('sequelize')
 const { Item, Lot, Bin, ScannerSelectionSample, ScanSession, ScanCandidate } = require('../models')
 const authMiddleware = require('../middlewares/auth')
 const requireRole = require('../middlewares/requireRole')
+const {
+  enrichCandidatesWithMlScores,
+  loadRankerModel
+} = require('../services/scannerRankerModel')
 
 const router = express.Router()
 const upload = multer({
@@ -354,6 +358,10 @@ const sanitizeSelectionCandidate = (candidate = {}) => ({
   detection_area_ratio: toFiniteNumber(candidate.detection_area_ratio),
   feedback_score: toFiniteNumber(candidate.feedback_score),
   feedback_signal: candidate.feedback_signal || null,
+  ml_score: toFiniteNumber(candidate.ml_score),
+  ml_model_status: String(candidate.ml_model_status || '').slice(0, 40) || null,
+  ml_model_version: String(candidate.ml_model_version || '').slice(0, 80) || null,
+  ml_reliable: toNullableBoolean(candidate.ml_reliable),
   db_found: Boolean(candidate.display?.found),
   display_title: String(candidate.display?.title || '').slice(0, 160),
   display_subtitle: String(candidate.display?.subtitle || '').slice(0, 160),
@@ -1016,6 +1024,37 @@ router.get(
   }
 )
 
+router.get(
+  '/roi-assist/ranking-model',
+  authMiddleware,
+  requireRole('admin'),
+  async (_req, res) => {
+    try {
+      const model = loadRankerModel()
+
+      res.json({
+        success: true,
+        model: {
+          available: model.available,
+          status: model.available ? model.training_summary?.sessions >= 30 ? 'ready' : 'warmup' : model.reason || 'unavailable',
+          version: model.version || null,
+          model_type: model.model_type || null,
+          trained_at: model.trained_at || null,
+          model_path: model.model_path,
+          training_summary: model.training_summary || null,
+          metrics: model.metrics || null
+        }
+      })
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to load scanner ranking model',
+        error: error.message
+      })
+    }
+  }
+)
+
 router.get('/roi-assist/health', async (_req, res) => {
   try {
     const response = await axios.get(`${AI_SERVICE_URL}/scanner/roi-assist/health`, {
@@ -1086,10 +1125,12 @@ router.post(
         limitedCandidates.map((candidate) => resolveCandidateDisplay(candidate))
       )
       const candidatesWithFeedback = await attachFeedbackSignals(resolvedCandidates, operationContext)
+      const mlRanking = enrichCandidatesWithMlScores(candidatesWithFeedback, operationContext)
 
       res.json({
         success: true,
-        candidates: candidatesWithFeedback
+        ranking_model: mlRanking.model,
+        candidates: mlRanking.candidates
       })
     } catch (error) {
       res.status(500).json({

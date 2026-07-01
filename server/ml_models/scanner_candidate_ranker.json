@@ -1,0 +1,80 @@
+{
+  "version": "scanner-ranker-logistic-v1",
+  "model_type": "logistic_regression",
+  "trained_at": "2026-07-01T08:22:20.250Z",
+  "feature_names": [
+    "center_score",
+    "area_score",
+    "confidence_score",
+    "roi_score",
+    "quality_score",
+    "database_score",
+    "feedback_score",
+    "rule_score",
+    "inverse_risk",
+    "is_item",
+    "is_lot",
+    "is_bin",
+    "is_barcode",
+    "is_qr",
+    "is_unknown_code",
+    "ctx_outbound",
+    "ctx_move",
+    "ctx_inbound",
+    "ctx_count",
+    "ctx_create_item"
+  ],
+  "weights": [
+    0.05644212,
+    -0.07334214,
+    0.02327928,
+    -0.06418481,
+    -0.0706955,
+    -0.16141486,
+    2.55447336,
+    0.13887374,
+    -0.16141486,
+    -0.16141486,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "bias": -0.16921796,
+  "training_config": {
+    "epochs": 900,
+    "learning_rate": 0.08,
+    "l2": 0.001
+  },
+  "training_summary": {
+    "sessions": 17,
+    "candidates": 54,
+    "positive_candidates": 17,
+    "negative_candidates": 37,
+    "operation_modes": {
+      "SCAN": 54
+    }
+  },
+  "metrics": {
+    "validation_mode": "holdout_by_session",
+    "train": {
+      "candidate_accuracy": 0.7857,
+      "log_loss": 0.578,
+      "ml_top1_accuracy": 0.6923,
+      "rule_top1_accuracy": 0.4615
+    },
+    "validation": {
+      "candidate_accuracy": 0.75,
+      "log_loss": 0.6073,
+      "ml_top1_accuracy": 0.5,
+      "rule_top1_accuracy": 0.5
+    }
+  },
+  "notes": "Warm-start ranker for context-aware multi-code selection. Keep rule-based ranking as guardrail until more sessions are collected."
+}

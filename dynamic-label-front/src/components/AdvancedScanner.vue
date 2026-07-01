@@ -2409,6 +2409,7 @@ const explainRoiSelection = (parts, riskPenalty, type, displayFound) => {
   if (parts.type >= 0.85) reasons.push(`${type} fits this action`)
   if (parts.center >= 0.78) reasons.push('near scan center')
   if (parts.database >= 0.9) reasons.push('matched warehouse data')
+  if (parts.ml >= 0.72) reasons.push('learned selection pattern')
   if (parts.quality >= 0.72) reasons.push('clear ROI')
   if (parts.feedback >= 0.28) reasons.push('selected before')
   if (parts.confidence >= 0.82) reasons.push('high detect confidence')
@@ -2434,6 +2435,10 @@ const scoreRoiCandidateForSelection = (candidate, index = 0, operationContext = 
   const typeScore = typeMatchScoreByContext(type, operationContext)
   const stabilityScore = getCandidateSightingScore(candidate)
   const feedbackScore = clampScore(candidate?.feedback_score, 0)
+  const mlScore = Number.isFinite(Number(candidate?.ml_score))
+    ? clampScore(Number(candidate.ml_score), 0.5)
+    : null
+  const mlWeight = mlScore == null ? 0 : candidate?.ml_reliable ? 0.28 : 0.12
   const riskPenalty = getRoiCandidateRiskPenalty(candidate, type)
 
   const parts = {
@@ -2444,7 +2449,8 @@ const scoreRoiCandidateForSelection = (candidate, index = 0, operationContext = 
     database: databaseScore,
     stability: stabilityScore,
     roi: roiScore,
-    feedback: feedbackScore
+    feedback: feedbackScore,
+    ml: mlScore ?? 0.5
   }
 
   const baseWeightedScore = (
@@ -2456,7 +2462,10 @@ const scoreRoiCandidateForSelection = (candidate, index = 0, operationContext = 
     parts.stability * 0.05 +
     parts.roi * 0.03
   )
-  const weightedScore = (baseWeightedScore * 0.92) + (parts.feedback * 0.08)
+  const scoreBeforeMl = (baseWeightedScore * 0.92) + (parts.feedback * 0.08)
+  const weightedScore = mlScore == null
+    ? scoreBeforeMl
+    : (scoreBeforeMl * (1 - mlWeight)) + (mlScore * mlWeight)
   const selectionScore = clampScore(weightedScore - (riskPenalty * 0.32))
 
   return {
@@ -2475,6 +2484,9 @@ const scoreRoiCandidateForSelection = (candidate, index = 0, operationContext = 
       stability_score: Number(parts.stability.toFixed(4)),
       roi_score: Number(parts.roi.toFixed(4)),
       feedback_score: Number(parts.feedback.toFixed(4)),
+      ml_score: mlScore == null ? null : Number(mlScore.toFixed(4)),
+      ml_weight: Number(mlWeight.toFixed(4)),
+      ml_model_status: candidate?.ml_model_status || null,
       risk_penalty: Number(riskPenalty.toFixed(4)),
       original_index: index
     },
@@ -2532,6 +2544,10 @@ const sanitizeRoiSelectionCandidate = (candidate) => ({
   quality_score: candidate?.quality_score ?? null,
   feedback_score: candidate?.feedback_score ?? null,
   feedback_signal: candidate?.feedback_signal || null,
+  ml_score: candidate?.ml_score ?? null,
+  ml_model_status: candidate?.ml_model_status || null,
+  ml_model_version: candidate?.ml_model_version || null,
+  ml_reliable: Boolean(candidate?.ml_reliable),
   best_preprocessing_mode: candidate?.best_preprocessing_mode || '',
   points: candidate?.points || candidate?.detection?.points || [],
   detection: candidate?.detection || null,
@@ -2637,6 +2653,10 @@ const formatRoiCandidateMeta = (candidate) => {
   }
   if (Number(candidate?.feedback_signal?.shown_count || 0) > 0) {
     pieces.push(`${candidate.feedback_signal.selected_count || 0}/${candidate.feedback_signal.shown_count} selected`)
+  }
+  if (Number.isFinite(Number(candidate?.ml_score))) {
+    const modelStatus = candidate?.ml_model_status === 'warmup' ? ' ML warmup' : ' ML'
+    pieces.push(`${Math.round(Number(candidate.ml_score) * 100)}%${modelStatus}`)
   }
   if (candidate?.best_preprocessing_mode) {
     pieces.push(candidate.best_preprocessing_mode)
@@ -2744,6 +2764,9 @@ const enrichRoiCandidates = async (candidates) => {
       return candidates
     }
 
+    if (payload.ranking_model) {
+      console.info('[ROI Assist] ranking model', payload.ranking_model)
+    }
     const resolvedById = new Map(payload.candidates.map((candidate) => [candidate.candidate_id, candidate]))
     return candidates.map((candidate) => resolvedById.get(candidate.candidate_id) || candidate)
   } catch (error) {
