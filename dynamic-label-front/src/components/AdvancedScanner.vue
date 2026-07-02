@@ -18,32 +18,69 @@
     <!-- 扫码区域 -->
     <div class="scanner-area">
       <!-- 摄像头预览 -->
-      <div v-if="currentMode === 'camera'" class="camera-container">
+      <div
+        v-if="currentMode === 'camera'"
+        :class="[
+          'camera-container',
+          {
+            'camera-container-suspended': shouldSuspendLiveScanner,
+            'camera-container-capture-visible': scanCapturePulse
+          }
+        ]"
+      >
         <div class="camera-stage">
           <video 
             ref="videoRef" 
             autoplay 
-            playsinline 
+            playsinline
+            webkit-playsinline="true"
+            muted
             class="camera-video"
-            :class="{ scanning: isScanning }"
+            :class="{ scanning: isScanning, ready: isVideoFrameReady, pending: !isVideoFrameReady }"
+            @loadeddata="handleVideoFrameReady"
+            @canplay="handleVideoFrameReady"
+            @playing="handleVideoFrameReady"
           ></video>
+
+          <div v-if="isScanning && !isVideoFrameReady" class="camera-stage-placeholder">
+            <div class="camera-stage-placeholder-copy">
+              <strong>Opening camera</strong>
+              <p>Preparing the live preview…</p>
+            </div>
+          </div>
           
           <!-- 扫描框 -->
           <div class="scan-overlay">
-            <div class="scan-frame">
+            <div ref="scanFrameRef" :class="['scan-frame', { 'scan-frame-locked': scanCapturePulse && !hasPositionedScanCapture }]">
               <div class="corner top-left"></div>
               <div class="corner top-right"></div>
               <div class="corner bottom-left"></div>
               <div class="corner bottom-right"></div>
             </div>
-            <p class="scan-hint">Please place the barcode inside the frame</p>
+            <div
+              v-if="scanCapturePulse && hasPositionedScanCapture"
+              class="scan-code-lock"
+              :style="scanCaptureOverlayStyle"
+              aria-live="polite"
+            >
+              <span class="scan-code-lock-corner scan-code-lock-top-left"></span>
+              <span class="scan-code-lock-corner scan-code-lock-top-right"></span>
+              <span class="scan-code-lock-corner scan-code-lock-bottom-left"></span>
+              <span class="scan-code-lock-corner scan-code-lock-bottom-right"></span>
+              <span class="scan-code-lock-dot"></span>
+              <span class="scan-code-lock-label">{{ scanCaptureMessage }}</span>
+            </div>
+            <p :class="['scan-hint', { 'scan-hint-captured': scanCapturePulse }]" aria-live="polite">
+              <span v-if="scanCapturePulse" class="scan-hint-dot"></span>
+              <span>{{ scanCapturePulse ? scanCaptureMessage : scanGuidanceMessage }}</span>
+            </p>
           </div>
         </div>
 
         <!-- 摄像头控制 -->
         <div class="camera-controls">
           <button @click="toggleCamera" class="control-btn">
-            {{ isScanning ? 'Stop Scan' : 'Start Scan' }}
+            {{ isScanning ? 'Stop Scan' : 'Retry Camera' }}
           </button>
           <button @click="switchCamera" class="control-btn" v-if="devices.length > 1">
             Switch Camera
@@ -52,8 +89,108 @@
             <span class="flash-icon">{{ flashOn ? '💡' : '🔦' }}</span>
             {{ flashOn ? 'Light Off' : 'Light On' }}
           </button>
+          <button
+            @click="triggerRoiAssist('manual')"
+            class="control-btn roi-assist-btn"
+            :disabled="isRoiAssistRunning || !isScanning"
+          >
+            {{ isRoiAssistRunning ? 'Enhancing...' : 'ROI Assist' }}
+          </button>
+        </div>
+        <div v-if="roiAssistStatus" class="roi-assist-status">
+          {{ roiAssistStatus }}
         </div>
 
+      </div>
+
+      <div class="benchmark-panel">
+        <button class="benchmark-toggle" @click="showBenchmarkPanel = !showBenchmarkPanel">
+          <span>Scanner Performance</span>
+          <span>{{ benchmarkStats.total }} samples · {{ formatPercent(benchmarkStats.successRate) }} success</span>
+        </button>
+        <div v-if="showBenchmarkPanel" class="benchmark-body">
+          <div class="benchmark-grid">
+            <div class="benchmark-card">
+              <span class="benchmark-label">Avg lock</span>
+              <strong>{{ formatMs(benchmarkStats.avgLockMs) }}</strong>
+            </div>
+            <div class="benchmark-card">
+              <span class="benchmark-label">Avg camera open</span>
+              <strong>{{ formatMs(benchmarkStats.avgFirstFrameMs) }}</strong>
+            </div>
+            <div class="benchmark-card">
+              <span class="benchmark-label">1D barcode</span>
+              <strong>{{ benchmarkStats.oneDimCount }} scans</strong>
+            </div>
+            <div class="benchmark-card">
+              <span class="benchmark-label">ROI / assist</span>
+              <strong>{{ benchmarkStats.roiAssistCount }} uses</strong>
+            </div>
+          </div>
+          <div class="benchmark-actions">
+            <button class="benchmark-action" @click="showBenchmarkPanel = false">Hide</button>
+            <button
+              v-if="isAdmin"
+              class="benchmark-action"
+              @click="fetchRankingSummary"
+              :disabled="isLoadingRankingSummary"
+            >
+              {{ isLoadingRankingSummary ? 'Refreshing...' : 'Refresh ranking summary' }}
+            </button>
+            <button
+              v-if="isAdmin"
+              class="benchmark-action"
+              @click="downloadRankingTrainingCsv"
+              :disabled="isExportingRankingCsv"
+            >
+              {{ isExportingRankingCsv ? 'Exporting...' : 'Export ranking CSV' }}
+            </button>
+            <button class="benchmark-action danger" @click="clearLocalBenchmarkSessions" :disabled="!localBenchmarkSessions.length">
+              Clear local stats
+            </button>
+          </div>
+          <div v-if="isAdmin && rankingSummary" class="ranking-summary">
+            <div class="ranking-summary-card">
+              <span>Ranking sessions</span>
+              <strong>{{ rankingSummary.totals?.sessions || 0 }}</strong>
+            </div>
+            <div class="ranking-summary-card">
+              <span>Candidates</span>
+              <strong>{{ rankingSummary.totals?.candidates || 0 }}</strong>
+            </div>
+            <div class="ranking-summary-card">
+              <span>Resolution rate</span>
+              <strong>{{ formatPercent(rankingSummary.totals?.session_resolution_rate) }}</strong>
+            </div>
+            <div class="ranking-summary-card">
+              <span>Avg rule score</span>
+              <strong>{{ formatScore(rankingSummary.feature_averages?.avg_rule_based_score) }}</strong>
+            </div>
+          </div>
+          <p v-if="rankingExportStatus" class="ranking-export-status">
+            {{ rankingExportStatus }}
+          </p>
+          <div class="benchmark-recent">
+            <h4>Recent scanner sessions</h4>
+            <div v-if="localBenchmarkSessions.length" class="benchmark-list">
+              <div
+                v-for="session in localBenchmarkSessions.slice(0, 5)"
+                :key="session.id"
+                class="benchmark-row"
+              >
+                <div>
+                  <strong>{{ session.labelType || 'UNKNOWN' }}</strong>
+                  <p>{{ (session.scenarioTags || []).slice(0, 4).join(' · ') || session.decodePath || 'No tags yet' }}</p>
+                </div>
+                <div class="benchmark-row-meta">
+                  <span :class="['benchmark-status', session.status]">{{ session.status }}</span>
+                  <span>{{ formatMs(session.lockMs) }} · {{ session.decodedFormat || session.decodeEngine || 'unknown' }}</span>
+                </div>
+              </div>
+            </div>
+            <p v-else class="benchmark-empty">No scanner sessions recorded on this device yet.</p>
+          </div>
+        </div>
       </div>
 
       <!-- 文件上传 -->
@@ -85,9 +222,49 @@
       </div>
     </div>
 
+    <div v-if="showMultiCodePicker" class="multi-code-card">
+      <div class="multi-code-header">
+        <div>
+          <span class="multi-code-eyebrow">Context-aware selection</span>
+          <h3>Multiple codes found</h3>
+          <p>Please choose the target label for this warehouse action.</p>
+        </div>
+        <button @click="dismissMultiCodePicker" class="multi-code-close" aria-label="Close multi-code picker">&times;</button>
+      </div>
+      <div class="multi-code-list">
+        <button
+          v-for="candidate in roiAssistCandidates"
+          :key="candidate.candidate_id || candidate.decoded_text"
+          :class="['multi-code-option', { recommended: candidate.selection_rank === 1 }]"
+          @click="selectRoiCandidate(candidate)"
+        >
+          <span class="multi-code-type">{{ resolveRoiCandidateType(candidate) }}</span>
+          <span v-if="candidate.selection_rank === 1" class="multi-code-recommendation">
+            Recommended
+          </span>
+          <span class="multi-code-main">{{ formatRoiCandidateTitle(candidate) }}</span>
+          <span class="multi-code-subtitle">{{ formatRoiCandidateSubtitle(candidate) }}</span>
+          <span v-if="shouldShowRoiCandidateRaw(candidate)" class="multi-code-raw">
+            {{ formatRoiCandidateRaw(candidate) }}
+          </span>
+          <span class="multi-code-meta">{{ formatRoiCandidateMeta(candidate) }}</span>
+          <span v-if="formatRoiCandidateSelectionReason(candidate)" class="multi-code-selection-reason">
+            {{ formatRoiCandidateSelectionReason(candidate) }}
+          </span>
+          <span v-if="formatRoiCandidatePrimary(candidate)" class="multi-code-primary">
+            {{ formatRoiCandidatePrimary(candidate) }}
+          </span>
+        </button>
+      </div>
+    </div>
+
     <!-- 扫描结果 -->
     <div v-if="scanResult" class="scan-result">
       <h3>Scan Result</h3>
+      <div class="result-meta-pills">
+        <span class="result-pill result-pill-live">Scanner Paused</span>
+        <span v-if="scanAction" class="result-pill">{{ scanAction.replaceAll('_', ' ') }}</span>
+      </div>
       <div class="result-content">
         <div class="result-item">
           <span class="label">Raw Data:</span>
@@ -100,14 +277,14 @@
       </div>
 
       <!-- 业务操作按钮 -->
-      <div class="business-actions">
+      <div class="business-actions business-actions-primary">
         <!-- 自动识别未入库商品时显示快速建档按钮 -->
-        <button v-if="isAdmin && scanAction === 'CREATE_ITEM'" @click="showCreateItemModal = true" class="action-btn" style="background: #10b981; color: white; border-color: #10b981;">
+        <button v-if="isAdmin && scanAction === 'CREATE_ITEM'" @click="showCreateItemModal = true" class="action-btn action-btn-create">
           <span class="icon">➕</span>
           Fast Item Creation
         </button>
 
-        <button v-if="isAdmin" @click="handleInbound" class="action-btn inbound">
+        <button v-if="isAdmin" @click="handleInbound" class="action-btn action-btn-primary inbound">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="7 10 12 15 17 10"/>
@@ -115,7 +292,7 @@
           </svg>
           Inbound Processing
         </button>
-        <button v-if="isAdmin" @click="handleMove" class="action-btn" style="background: #0f172a; color: white;">
+        <button v-if="isAdmin" @click="handleMove" class="action-btn action-btn-dark">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M16 3h5v5"/>
             <path d="M4 20L21 3"/>
@@ -125,7 +302,7 @@
           </svg>
           Move Bin
         </button>
-        <button @click="handleOutbound" class="action-btn outbound">
+        <button @click="handleOutbound" class="action-btn action-btn-primary outbound">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="17 8 12 3 7 8"/>
@@ -133,7 +310,15 @@
           </svg>
           Outbound Processing
         </button>
-        <button @click="clearResult" class="action-btn clear">
+      </div>
+      <div class="business-actions business-actions-secondary">
+        <button @click="handleScanNext" class="action-btn action-btn-secondary resume">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Scan Next
+        </button>
+        <button @click="clearResult" class="action-btn action-btn-secondary clear">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -144,10 +329,15 @@
     </div>
 
     <div v-if="actionFeedbackModal.visible" class="modal-overlay modal-overlay-foreground" @click="closeActionFeedbackModal">
-      <div class="modal-content action-feedback-modal" @click.stop>
-        <div class="action-feedback-icon">✓</div>
-        <h3>{{ actionFeedbackModal.title }}</h3>
-        <p>{{ actionFeedbackModal.message }}</p>
+      <div class="modal-content glass-panel action-feedback-modal" @click.stop>
+        <div class="action-feedback-orb">
+          <span>✓</span>
+        </div>
+        <div class="action-feedback-copy-block">
+          <span class="action-feedback-eyebrow">Warehouse Updated</span>
+          <h3>{{ actionFeedbackModal.title }}</h3>
+          <p>{{ actionFeedbackModal.message }}</p>
+        </div>
         <button @click="closeActionFeedbackModal" class="btn-primary action-feedback-btn">Done</button>
       </div>
     </div>
@@ -351,38 +541,72 @@
 
     <!-- 出库弹窗 -->
     <div v-if="showOutboundModal" class="modal-overlay" @click="showOutboundModal = false">
-      <div class="modal-content glass-panel" @click.stop>
-        <div class="modal-header">
-          <h3>📤 Outbound Processing</h3>
+      <div class="modal-content glass-panel outbound-modal" @click.stop>
+        <div class="modal-header modal-header-glass">
+          <div class="modal-header-copy">
+            <span class="modal-eyebrow">Inventory Action</span>
+            <h3>Outbound Processing</h3>
+          </div>
           <button @click="showOutboundModal = false" class="close-btn">&times;</button>
         </div>
         <div class="modal-body form-body">
-          <div class="form-group">
-            <label>SKU</label>
-            <input type="text" v-model="outboundForm.sku" disabled class="input-field disabled-input">
-          </div>
-          <div class="form-group">
-            <label>Item Name</label>
-            <input type="text" v-model="outboundForm.item_name" disabled class="input-field disabled-input">
-          </div>
-          <div v-if="outboundWorkflowGuide.length" class="form-group">
-            <label>Workflow Guide</label>
-            <div class="workflow-guide-compact">
-              <div v-for="tip in outboundWorkflowGuide" :key="`modal-${tip}`" class="workflow-guide-compact-item">
-                {{ tip }}
+          <div class="outbound-summary-card">
+            <div class="outbound-summary-topline">
+              <span class="outbound-summary-eyebrow">Selected item</span>
+              <span class="outbound-summary-badge">{{ isOutboundAutoMode ? 'FIFO Flow' : 'Specific Lot' }}</span>
+            </div>
+            <div class="outbound-summary-grid">
+              <div class="outbound-summary-field">
+                <span>SKU</span>
+                <strong>{{ outboundForm.sku || '—' }}</strong>
+              </div>
+              <div class="outbound-summary-field outbound-summary-field-wide">
+                <span>Item Name</span>
+                <strong>{{ outboundForm.item_name || '—' }}</strong>
               </div>
             </div>
           </div>
-          <div v-if="isOutboundFifoMode" class="form-group">
+          <div v-if="outboundWorkflowGuide.length" class="form-group">
+            <label>Workflow Guide</label>
+            <div class="workflow-guide-compact outbound-workflow-guide">
+              <div v-for="(tip, index) in outboundWorkflowGuide" :key="`modal-${tip}`" class="workflow-guide-compact-item workflow-guide-glass-item">
+                <span class="workflow-guide-index">{{ index + 1 }}</span>
+                <span>{{ tip }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-if="isOutboundFifoMode && canChooseOutboundLot" class="form-group">
+            <label>Outbound Mode</label>
+            <div class="outbound-mode-toggle">
+              <button
+                type="button"
+                class="outbound-mode-btn"
+                :class="{ active: outboundSelectionMode === 'AUTO' }"
+                @click="setOutboundSelectionMode('AUTO')"
+              >
+                FIFO Auto
+              </button>
+              <button
+                type="button"
+                class="outbound-mode-btn"
+                :class="{ active: outboundSelectionMode === 'MANUAL' }"
+                @click="setOutboundSelectionMode('MANUAL')"
+              >
+                Choose Lot
+              </button>
+            </div>
+            <p class="form-hint">FIFO is still the default, but you can switch to a specific lot whenever you need exact batch control.</p>
+          </div>
+          <div v-show="isOutboundAutoMode" class="form-group">
             <label>Deduction Strategy</label>
             <input type="text" value="FIFO · oldest lot first" disabled class="input-field disabled-input">
             <p class="form-hint">Scanning an item label will now deduct from the oldest active lot first, then continue forward only if more stock is needed.</p>
           </div>
-          <div v-if="isOutboundFifoMode" class="form-group">
+          <div v-show="isOutboundAutoMode" class="form-group">
             <label>FIFO Plan</label>
             <div class="outbound-plan-list">
               <div
-                v-for="(candidate, index) in outboundCandidates"
+                v-for="(candidate, index) in outboundPlanPreview"
                 :key="candidate.key"
                 class="outbound-plan-card"
               >
@@ -395,8 +619,11 @@
                 </div>
               </div>
             </div>
+            <p v-if="remainingOutboundPlanCount > 0" class="form-hint">
+              +{{ remainingOutboundPlanCount }} more FIFO steps are available if additional stock is needed.
+            </p>
           </div>
-          <div v-else-if="outboundCandidates.length > 1" class="form-group">
+          <div v-show="!isOutboundAutoMode && outboundCandidates.length > 1" class="form-group">
             <label>Source Lot / Bin ✳️</label>
             <select v-model="selectedOutboundLotKey" @change="syncOutboundCandidate" class="input-field">
               <option
@@ -407,14 +634,14 @@
                 {{ formatOutboundCandidateLabel(candidate) }}
               </option>
             </select>
-            <p class="form-hint">This item exists in multiple bins, so please choose the exact source location to deduct from.</p>
+            <p class="form-hint">Choose the exact lot and bin you want to deduct from.</p>
           </div>
           <div class="form-group">
-            <label>{{ isOutboundFifoMode ? 'Lot Sequence' : 'Lot Number' }}</label>
+            <label>{{ isOutboundAutoMode ? 'Lot Sequence' : 'Lot Number' }}</label>
             <input type="text" v-model="outboundForm.lot_number" disabled class="input-field disabled-input">
           </div>
           <div class="form-group">
-            <label>{{ isOutboundFifoMode ? 'Source Bins' : 'Source Bin' }}</label>
+            <label>{{ isOutboundAutoMode ? 'Source Bins' : 'Source Bin' }}</label>
             <input type="text" v-model="outboundForm.source_bin_code" disabled class="input-field disabled-input">
           </div>
           <div class="form-group">
@@ -438,15 +665,21 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  applyPreferredTrackConstraints,
+  buildDecodeCandidatesFromVideo,
+  buildLinearDecodeCandidatesFromVideo,
   buildPreferredVideoConstraints,
-  createEnhancedCodeReader
+  computeFrameMetrics,
+  createEnhancedCodeReader,
+  decodeFromCandidates
 } from '@/utils/enhancedScanner'
 // import QRCode from 'qrcode' // 暂时注释，后续会用到
 
 const router = useRouter()
+const PREFERRED_CAMERA_DEVICE_KEY = 'preferredCameraDeviceId'
 
 const isHandheldClient = () => {
   const ua = window.navigator.userAgent || window.navigator.vendor || ''
@@ -458,6 +691,7 @@ const isHandheldClient = () => {
 
 // 响应式数据
 const videoRef = ref(null)
+const scanFrameRef = ref(null)
 const fileInput = ref(null)
 const isScanning = ref(false)
 const currentMode = ref('camera')
@@ -465,12 +699,29 @@ const scanResult = ref(null)
 const scanAction = ref(null) // 保存后端的 action 标识
 const statusMessage = ref('')
 const statusType = ref('info')
+const isVideoFrameReady = ref(false)
+const scanCapturePulse = ref(false)
+const scanCaptureMessage = ref('Code captured')
+const scanCaptureLocation = ref(null)
+const scanGuidanceMessage = ref('Please place the barcode inside the frame')
 const manualCode = ref('')
 const devices = ref([])
-const selectedDevice = ref('')
+const selectedDevice = ref(localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || '')
 const hasFlash = ref(false)
 const flashOn = ref(false)
 const scanCanvasCache = {}
+const WORKER_CAPTURE_MAX_WIDTH = 1280
+const WORKER_CAPTURE_MAX_HEIGHT = 720
+const ROI_ASSIST_CAPTURE_MAX_WIDTH = 960
+const ROI_ASSIST_JPEG_QUALITY = 0.72
+const ROI_ASSIST_AUTO_DELAY_MS = 3500
+const ROI_ASSIST_COOLDOWN_MS = 7000
+const ROI_ASSIST_TIMEOUT_MS = 15000
+const FRAME_STABILITY_SAMPLE_MS = 480
+const SCANNER_STATS_STORAGE_KEY = 'scannerPerformanceSessions'
+const SCANNER_SELECTION_STORAGE_KEY = 'scannerSelectionSamples'
+const MULTI_CODE_AUTO_SELECT_MIN_SCORE = 0.88
+const MULTI_CODE_AUTO_SELECT_MIN_MARGIN = 0.22
 const userRole = ref(localStorage.getItem('userRole') || 'operator')
 const isAdmin = userRole.value === 'admin'
 const SCAN_COOLDOWN_MS = 1200
@@ -489,8 +740,14 @@ const actionFeedbackModal = ref({
   title: '',
   message: ''
 })
+const isRoiAssistRunning = ref(false)
+const roiAssistStatus = ref('')
+const roiAssistCandidates = ref([])
+const showMultiCodePicker = ref(false)
 let sharedAudioContext = null
 let removeAudioPrimeListeners = null
+let scanCapturePulseTimer = null
+let roiCandidateSightings = new Map()
 
 // 新建商品相关状态
 const showCreateItemModal = ref(false)
@@ -541,6 +798,7 @@ const isSubmittingOutbound = ref(false)
 const outboundCandidates = ref([])
 const selectedOutboundLotKey = ref('')
 const outboundStrategy = ref('DIRECT')
+const outboundSelectionMode = ref('AUTO')
 const outboundForm = ref({
   sku: '',
   item_name: '',
@@ -550,6 +808,45 @@ const outboundForm = ref({
   qty: 1,
   uom: 'pcs'
 })
+
+const hasInteractiveModalOpen = computed(() => (
+  showCreateItemModal.value ||
+  showInboundModal.value ||
+  showMoveModal.value ||
+  showOutboundModal.value ||
+  showMultiCodePicker.value ||
+  actionFeedbackModal.value.visible
+))
+
+const hasResultWorkspaceOpen = computed(() => Boolean(scanResult.value) && !hasInteractiveModalOpen.value)
+
+const shouldSuspendLiveScanner = computed(() => (
+  hasInteractiveModalOpen.value || hasResultWorkspaceOpen.value
+))
+
+const pauseOutboundLiveDecoding = () => {
+  stopScanLoop()
+  if (videoRef.value && !videoRef.value.paused) {
+    videoRef.value.pause()
+  }
+}
+
+const resumeOutboundLiveDecoding = () => {
+  if (!isScanning.value || !videoRef.value || isHandlingScan.value) return
+
+  if (videoRef.value.paused) {
+    const playPromise = videoRef.value.play()
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch((error) => {
+        console.warn('Unable to resume live preview cleanly after closing a workflow modal.', error)
+      })
+    }
+  }
+  if (scanLoopFrame) return
+
+  lastDecodeAttemptAt = 0
+  runEnhancedScanLoop()
+}
 
 // 🔑 幂等性与离线队列
 // 1. 从 LocalStorage 初始化队列 (Persistence)
@@ -562,6 +859,25 @@ const isProcessingQueue = ref(false)
 watch(requestQueue, (newQueue) => {
   localStorage.setItem('offlineQueue', JSON.stringify(newQueue))
 }, { deep: true })
+
+watch(
+  [
+    () => Boolean(scanResult.value),
+    showCreateItemModal,
+    showInboundModal,
+    showMoveModal,
+    showOutboundModal,
+    () => actionFeedbackModal.value.visible
+  ],
+  () => {
+    if (shouldSuspendLiveScanner.value) {
+      pauseOutboundLiveDecoding()
+      return
+    }
+
+    resumeOutboundLiveDecoding()
+  }
+)
 
 // 队列处理逻辑 (Background Worker)
 const processQueue = async () => {
@@ -637,6 +953,316 @@ const canUseVibrationFeedback = () => {
   const isIOS = /iPhone|iPad|iPod/i.test(ua)
 
   return typeof navigator.vibrate === 'function' && !isIOS
+}
+
+const clearScanCapturePulseTimer = () => {
+  if (scanCapturePulseTimer) {
+    clearTimeout(scanCapturePulseTimer)
+    scanCapturePulseTimer = null
+  }
+}
+
+const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max)
+
+const normalizeCapturePoint = (point) => {
+  if (!point || typeof point !== 'object') return null
+  const x = Number(point.x ?? point[0])
+  const y = Number(point.y ?? point[1])
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  return { x, y }
+}
+
+const normalizeCapturePoints = (points) => {
+  if (!Array.isArray(points)) return []
+  return points.map(normalizeCapturePoint).filter(Boolean)
+}
+
+const getScanCaptureBounds = (location) => {
+  const points = normalizeCapturePoints(location?.points)
+  if (!points.length) return null
+
+  const xs = points.map((point) => point.x)
+  const ys = points.map((point) => point.y)
+  let minX = Math.min(...xs)
+  let maxX = Math.max(...xs)
+  let minY = Math.min(...ys)
+  let maxY = Math.max(...ys)
+
+  if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null
+  if (maxX - minX <= 0 && maxY - minY <= 0) return null
+
+  const sourceWidth = Number(location?.imageWidth || location?.frameWidth || 0)
+  const sourceHeight = Number(location?.imageHeight || location?.frameHeight || 0)
+  const minSourceWidth = sourceWidth ? sourceWidth * 0.04 : 22
+  const minSourceHeight = sourceHeight ? sourceHeight * 0.04 : 22
+
+  if (maxX - minX < minSourceWidth) {
+    const expand = (minSourceWidth - (maxX - minX)) / 2
+    minX -= expand
+    maxX += expand
+  }
+
+  if (maxY - minY < minSourceHeight) {
+    const expand = (minSourceHeight - (maxY - minY)) / 2
+    minY -= expand
+    maxY += expand
+  }
+
+  return { minX, maxX, minY, maxY }
+}
+
+const scanCaptureOverlayStyle = computed(() => {
+  const location = scanCaptureLocation.value
+  const bounds = getScanCaptureBounds(location)
+  const video = videoRef.value
+  const stage = video?.parentElement
+  if (!bounds || !video || !stage) return null
+
+  const stageRect = stage.getBoundingClientRect()
+  if (!stageRect.width || !stageRect.height) return null
+
+  const sourceWidth = Number(location?.imageWidth || location?.frameWidth || video.videoWidth || 0)
+  const sourceHeight = Number(location?.imageHeight || location?.frameHeight || video.videoHeight || 0)
+  if (!sourceWidth || !sourceHeight) return null
+
+  const coverScale = Math.max(stageRect.width / sourceWidth, stageRect.height / sourceHeight)
+  const renderedWidth = sourceWidth * coverScale
+  const renderedHeight = sourceHeight * coverScale
+  const offsetX = (stageRect.width - renderedWidth) / 2
+  const offsetY = (stageRect.height - renderedHeight) / 2
+
+  let width = Math.max((bounds.maxX - bounds.minX) * coverScale, 44)
+  let height = Math.max((bounds.maxY - bounds.minY) * coverScale, 44)
+  let left = offsetX + (bounds.minX * coverScale)
+  let top = offsetY + (bounds.minY * coverScale)
+  const centerX = left + (width / 2)
+  const centerY = top + (height / 2)
+
+  width = Math.min(width, stageRect.width - 8)
+  height = Math.min(height, stageRect.height - 8)
+  left = clampNumber(centerX - (width / 2), 4, Math.max(stageRect.width - width - 4, 4))
+  top = clampNumber(centerY - (height / 2), 4, Math.max(stageRect.height - height - 4, 4))
+
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${width}px`,
+    height: `${height}px`
+  }
+})
+
+const hasPositionedScanCapture = computed(() => Boolean(scanCaptureOverlayStyle.value))
+
+const hideScanCapturePulse = () => {
+  clearScanCapturePulseTimer()
+  scanCapturePulse.value = false
+  scanCaptureLocation.value = null
+}
+
+const showScanCapturePulse = (message = 'Code captured', location = null) => {
+  scanCaptureMessage.value = message
+  scanCaptureLocation.value = location
+  scanCapturePulse.value = false
+  clearScanCapturePulseTimer()
+
+  window.requestAnimationFrame(() => {
+    scanCapturePulse.value = true
+    scanCapturePulseTimer = window.setTimeout(() => {
+      scanCapturePulse.value = false
+      scanCapturePulseTimer = null
+    }, 1250)
+  })
+}
+
+const loadLocalBenchmarkSessions = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SCANNER_STATS_STORAGE_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.slice(0, 40) : []
+  } catch (_error) {
+    return []
+  }
+}
+
+const saveLocalBenchmarkSession = (session) => {
+  const nextSessions = [session, ...loadLocalBenchmarkSessions()]
+    .filter(Boolean)
+    .slice(0, 40)
+  localBenchmarkSessions.value = nextSessions
+  localStorage.setItem(SCANNER_STATS_STORAGE_KEY, JSON.stringify(nextSessions))
+}
+
+const clearLocalBenchmarkSessions = () => {
+  localBenchmarkSessions.value = []
+  localStorage.removeItem(SCANNER_STATS_STORAGE_KEY)
+}
+
+const averageOf = (values) => {
+  const finiteValues = values.map(Number).filter(Number.isFinite)
+  if (!finiteValues.length) return null
+  return finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length
+}
+
+const benchmarkStats = computed(() => {
+  const sessions = localBenchmarkSessions.value || []
+  const total = sessions.length
+  const successSessions = sessions.filter((session) => session.status === 'success')
+  const oneDimSessions = sessions.filter((session) => (session.scenarioTags || []).includes('one-dimensional'))
+  const roiAssistSessions = sessions.filter((session) => String(session.mode || '').includes('roi') || String(session.decodePath || '').includes('roi'))
+
+  return {
+    total,
+    successRate: total ? successSessions.length / total : 0,
+    avgLockMs: averageOf(successSessions.map((session) => session.lockMs)),
+    avgFirstFrameMs: averageOf(sessions.map((session) => session.firstFrameMs)),
+    oneDimCount: oneDimSessions.length,
+    roiAssistCount: roiAssistSessions.length
+  }
+})
+
+const formatMs = (value) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return 'n/a'
+  if (numericValue >= 1000) return `${(numericValue / 1000).toFixed(1)}s`
+  return `${Math.round(numericValue)}ms`
+}
+
+const formatPercent = (value) => `${Math.round(Number(value || 0) * 100)}%`
+
+const formatScore = (value) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return 'n/a'
+  return numericValue.toFixed(2)
+}
+
+const extractDownloadFilename = (contentDisposition, fallback) => {
+  const disposition = String(contentDisposition || '')
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1])
+    } catch (_error) {
+      return utf8Match[1]
+    }
+  }
+
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i)
+  return plainMatch?.[1] || fallback
+}
+
+const fetchRankingSummary = async () => {
+  if (!isAdmin || isLoadingRankingSummary.value) return
+
+  const token = localStorage.getItem('token')
+  if (!token) {
+    handleAuthFailure()
+    return
+  }
+
+  isLoadingRankingSummary.value = true
+  rankingExportStatus.value = 'Refreshing ranking training summary...'
+
+  try {
+    const response = await fetch('/api/scanner/roi-assist/ranking-summary', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    const payload = await response.json().catch(() => ({}))
+
+    if (!response.ok) {
+      const message = payload.message || payload.error || 'Failed to refresh ranking summary'
+      if (isAuthFailure(response.status, message)) {
+        handleAuthFailure(message)
+        return
+      }
+      throw new Error(message)
+    }
+
+    rankingSummary.value = payload.summary || null
+    rankingExportStatus.value = 'Ranking summary refreshed.'
+  } catch (error) {
+    rankingExportStatus.value = error.message || 'Failed to refresh ranking summary'
+  } finally {
+    isLoadingRankingSummary.value = false
+  }
+}
+
+const downloadRankingTrainingCsv = async () => {
+  if (!isAdmin || isExportingRankingCsv.value) return
+
+  const token = localStorage.getItem('token')
+  if (!token) {
+    handleAuthFailure()
+    return
+  }
+
+  isExportingRankingCsv.value = true
+  rankingExportStatus.value = 'Preparing ranking training CSV...'
+
+  try {
+    const response = await fetch('/api/scanner/roi-assist/ranking-export', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      const message = payload.message || payload.error || 'Failed to export ranking CSV'
+      if (isAuthFailure(response.status, message)) {
+        handleAuthFailure(message)
+        return
+      }
+      throw new Error(message)
+    }
+
+    const blob = await response.blob()
+    const filename = extractDownloadFilename(
+      response.headers.get('content-disposition'),
+      `scanner-ranking-training-${Date.now()}.csv`
+    )
+    const downloadUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(downloadUrl)
+
+    rankingExportStatus.value = `Downloaded ${filename}`
+    void fetchRankingSummary()
+  } catch (error) {
+    rankingExportStatus.value = error.message || 'Failed to export ranking CSV'
+  } finally {
+    isExportingRankingCsv.value = false
+  }
+}
+
+const clearAuthSession = () => {
+  localStorage.removeItem('token')
+  localStorage.removeItem('userRole')
+  localStorage.removeItem('username')
+  localStorage.removeItem('userEmail')
+  localStorage.removeItem('userAvatar')
+}
+
+const isAuthFailure = (status, message = '') => {
+  const normalizedMessage = String(message || '')
+  return status === 401 ||
+    normalizedMessage.includes('认证令牌') ||
+    normalizedMessage.toLowerCase().includes('token')
+}
+
+const handleAuthFailure = (message = 'Login expired. Please sign in again.') => {
+  clearAuthSession()
+  statusMessage.value = message.includes('过期')
+    ? 'Login expired. Please sign in again.'
+    : message
+  statusType.value = 'error'
+  window.setTimeout(() => {
+    router.push('/login')
+  }, 900)
 }
 
 const getSharedAudioContext = () => {
@@ -756,9 +1382,13 @@ const moveTargetBins = computed(() => {
   return availableBins.value.filter((bin) => bin.bin_code !== currentBinCode)
 })
 const isOutboundFifoMode = computed(() => outboundStrategy.value === 'FIFO')
+const canChooseOutboundLot = computed(() => outboundCandidates.value.length > 1)
+const isOutboundAutoMode = computed(() => isOutboundFifoMode.value && outboundSelectionMode.value === 'AUTO')
 const totalOutboundAvailableQty = computed(() => (
   outboundCandidates.value.reduce((sum, candidate) => sum + Number(candidate.available_qty || 0), 0)
 ))
+const outboundPlanPreview = computed(() => outboundCandidates.value.slice(0, 4))
+const remainingOutboundPlanCount = computed(() => Math.max(outboundCandidates.value.length - outboundPlanPreview.value.length, 0))
 const outboundWorkflowGuide = computed(() => {
   const parsed = scanResult.value?.parsed
   if (!parsed) return []
@@ -777,10 +1407,10 @@ const outboundWorkflowGuide = computed(() => {
 
     if (activeLots.length > 1) {
       return [
-        'Scanning an item label uses FIFO automatic deduction across the oldest active lots.',
+        'Scanning an item label defaults to FIFO deduction across the oldest active lots.',
         lotsWithExpiry.length
-          ? 'Expiry dates are available on some lots. If expiry matters more than FIFO, scan the lot label you want before confirming outbound.'
-          : 'If you need an exact batch or location instead of FIFO, scan the lot label directly.'
+          ? 'Expiry dates are available on some lots. You can switch to Choose Lot if you want to deduct a specific batch instead of FIFO.'
+          : 'You can keep FIFO Auto, or switch to Choose Lot when you need an exact batch or bin.'
       ]
     }
 
@@ -992,7 +1622,7 @@ const sortOutboundCandidatesForFifo = (candidates) => {
 }
 
 const syncOutboundCandidate = () => {
-  if (isOutboundFifoMode.value) {
+  if (isOutboundAutoMode.value) {
     const firstCandidate = outboundCandidates.value[0]
     const totalAvailable = totalOutboundAvailableQty.value
     const boundedQty = Math.min(
@@ -1034,6 +1664,12 @@ const syncOutboundCandidate = () => {
   }
 }
 
+const setOutboundSelectionMode = (mode) => {
+  if (outboundSelectionMode.value === mode) return
+  outboundSelectionMode.value = mode
+  syncOutboundCandidate()
+}
+
 const resolveOutboundCandidates = () => {
   const parsed = scanResult.value?.parsed
 
@@ -1067,25 +1703,242 @@ const resolveOutboundCandidates = () => {
   return { error: 'Please scan an item label or a lot label before outbound.' }
 }
 
-const ensureScanCanvas = (key, width, height) => {
-  if (!scanCanvasCache[key]) {
-    scanCanvasCache[key] = document.createElement('canvas')
-  }
-
-  const canvas = scanCanvasCache[key]
-  if (canvas.width !== width) canvas.width = width
-  if (canvas.height !== height) canvas.height = height
-  return canvas
+const resolveScanLabelType = (parsed, action = '') => {
+  if (parsed?.lot) return 'LOT'
+  if (parsed?.bin) return 'BIN'
+  if (parsed?.item) return 'ITEM'
+  if (action === 'CREATE_ITEM') return 'NEW_ITEM'
+  return 'UNKNOWN'
 }
 
-const tryDecodeCanvas = (canvas) => {
+const createBenchmarkSession = (mode = currentMode.value) => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  mode,
+  startedAt: new Date().toISOString(),
+  startPerf: performance.now(),
+  status: 'pending',
+  frameSamples: 0,
+  frameScoreTotal: 0,
+  bestFrameScore: null,
+  worstFrameScore: null,
+  brightnessTotal: 0,
+  lowLightFrames: 0,
+  blurryFrames: 0,
+  decodeAttempts: 0,
+  deviceId: selectedDevice.value || '',
+  deviceLabel: formatCameraLabel(
+    devices.value.find((device) => device.deviceId === selectedDevice.value) || {},
+    Math.max(devices.value.findIndex((device) => device.deviceId === selectedDevice.value), 0)
+  ),
+  labelType: 'PENDING',
+  lockMs: null,
+  firstFrameMs: null,
+  decodePath: '',
+  decodedFormat: '',
+  decodeEngine: '',
+  fillRatio: null,
+  scenarioTags: [],
+  completedAt: null
+})
+
+const activeBenchmarkSession = ref(null)
+
+const postBenchmarkSession = async (sessionPayload) => {
+  const token = localStorage.getItem('token')
+  if (!token) return
+
   try {
-    const result = getCodeReader().decodeFromCanvas(canvas)
-    if (!result?.getText?.()) return ''
-    return String(result.getText()).trim()
+    await fetch('/api/scan/benchmark', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(sessionPayload),
+      keepalive: true
+    })
   } catch (error) {
-    return ''
+    console.warn('Failed to send scanner benchmark session:', error)
   }
+}
+
+const beginBenchmarkSession = (mode = currentMode.value) => {
+  activeBenchmarkSession.value = createBenchmarkSession(mode)
+}
+
+const ensureBenchmarkSession = (mode = currentMode.value) => {
+  if (!activeBenchmarkSession.value || activeBenchmarkSession.value.status !== 'pending') {
+    beginBenchmarkSession(mode)
+  }
+}
+
+const captureBenchmarkFrame = (metrics) => {
+  if (!activeBenchmarkSession.value || !metrics) return
+
+  activeBenchmarkSession.value.frameSamples += 1
+  const frameScore = Number(metrics.score || 0)
+  activeBenchmarkSession.value.frameScoreTotal += frameScore
+  activeBenchmarkSession.value.bestFrameScore = activeBenchmarkSession.value.bestFrameScore == null
+    ? frameScore
+    : Math.max(activeBenchmarkSession.value.bestFrameScore, frameScore)
+  activeBenchmarkSession.value.worstFrameScore = activeBenchmarkSession.value.worstFrameScore == null
+    ? frameScore
+    : Math.min(activeBenchmarkSession.value.worstFrameScore, frameScore)
+  activeBenchmarkSession.value.brightnessTotal += Number(metrics.brightness || 0)
+  if (metrics.lowLight) activeBenchmarkSession.value.lowLightFrames += 1
+  if (metrics.blurry) activeBenchmarkSession.value.blurryFrames += 1
+}
+
+const captureBenchmarkDecode = (decoded = {}) => {
+  if (!activeBenchmarkSession.value || !decoded) return
+
+  if (decoded.label) activeBenchmarkSession.value.decodePath = decoded.label
+  if (decoded.format) activeBenchmarkSession.value.decodedFormat = decoded.format
+  if (decoded.engine) activeBenchmarkSession.value.decodeEngine = decoded.engine
+  if (decoded.fillRatio != null) activeBenchmarkSession.value.fillRatio = decoded.fillRatio
+}
+
+const captureBenchmarkFirstFrame = () => {
+  if (!activeBenchmarkSession.value) return
+  if (activeBenchmarkSession.value.firstFrameMs != null) return
+
+  activeBenchmarkSession.value.firstFrameMs = performance.now() - activeBenchmarkSession.value.startPerf
+}
+
+const inferBenchmarkScenarioTags = (session, {
+  status,
+  labelType,
+  rawData,
+  lockMs,
+  avgFrameScore,
+  avgBrightness
+}) => {
+  const tags = new Set(Array.isArray(session.scenarioTags) ? session.scenarioTags : [])
+  const frameSamples = Number(session.frameSamples || 0)
+  const lowLightRatio = frameSamples ? session.lowLightFrames / frameSamples : 0
+  const blurryRatio = frameSamples ? session.blurryFrames / frameSamples : 0
+  const normalizedLabelType = String(labelType || '').toUpperCase()
+  const normalizedFormat = String(session.decodedFormat || '').toUpperCase()
+
+  if (status === 'success') tags.add('decoded')
+  if (status !== 'success') tags.add('not-decoded')
+  if (session.firstFrameMs != null && session.firstFrameMs > 2500) tags.add('slow-camera-open')
+  if (status === 'success' && lockMs > 3000) tags.add('slow-lock')
+  if (status === 'success' && lockMs <= 1200) tags.add('fast-lock')
+  if (frameSamples > 0 && (lowLightRatio >= 0.25 || avgBrightness < 96)) tags.add('low-light')
+  if (frameSamples > 0 && blurryRatio >= 0.25) tags.add('blur-risk')
+  if (frameSamples > 0 && avgFrameScore < 0.45) tags.add('low-frame-quality')
+  if (/QR/.test(normalizedFormat)) tags.add('two-dimensional')
+  if (/CODE|EAN|UPC|CODABAR|ITF/.test(normalizedFormat)) tags.add('one-dimensional')
+  if (normalizedLabelType) tags.add(`label-${normalizedLabelType.toLowerCase()}`)
+  if (String(rawData || '').length > 120) tags.add('large-payload')
+
+  return Array.from(tags).slice(0, 12)
+}
+
+const finalizeBenchmarkSession = ({ status, labelType = 'UNKNOWN', rawData = '' } = {}) => {
+  if (!activeBenchmarkSession.value) return
+
+  const session = activeBenchmarkSession.value
+  const completedAt = Date.now()
+  const lockMs = performance.now() - session.startPerf
+  const avgFrameScore = session.frameSamples ? session.frameScoreTotal / session.frameSamples : 0
+  const avgBrightness = session.frameSamples ? session.brightnessTotal / session.frameSamples : 0
+  const scenarioTags = inferBenchmarkScenarioTags(session, {
+    status,
+    labelType,
+    rawData,
+    lockMs,
+    avgFrameScore,
+    avgBrightness
+  })
+
+  const completedSession = {
+    ...session,
+    status,
+    labelType,
+    rawData,
+    completedAt,
+    completedAtIso: new Date(completedAt).toISOString(),
+    lockMs,
+    avgFrameScore,
+    avgBrightness,
+    scenarioTags
+  }
+
+  activeBenchmarkSession.value = null
+  saveLocalBenchmarkSession(completedSession)
+  void postBenchmarkSession(completedSession)
+
+  if (isScanning.value) {
+    beginBenchmarkSession('camera')
+  }
+}
+
+const updateScanGuidance = (metrics) => {
+  const now = performance.now()
+  if (now - lastGuidanceUpdateAt < 680) return
+  lastGuidanceUpdateAt = now
+
+  if (scanCapturePulse.value) return
+  if (isRoiAssistRunning.value) {
+    scanGuidanceMessage.value = 'Enhanced scan is checking this frame...'
+    return
+  }
+
+  if (!metrics) {
+    scanGuidanceMessage.value = 'Please place the barcode inside the frame'
+    return
+  }
+
+  if (decodeMissStreak >= 24) {
+    scanGuidanceMessage.value = 'Move closer or use ROI Assist'
+  } else if (metrics.lowLight) {
+    scanGuidanceMessage.value = 'Too dark - turn on light or move closer'
+  } else if (metrics.blurry) {
+    scanGuidanceMessage.value = 'Hold steady for a sharper frame'
+  } else if (decodeMissStreak >= 12) {
+    scanGuidanceMessage.value = 'Center the code and hold steady'
+  } else {
+    scanGuidanceMessage.value = 'Please place the barcode inside the frame'
+  }
+}
+
+const isFrameStableForAssist = (video) => {
+  const now = performance.now()
+  if (now - lastStabilitySampleAt < FRAME_STABILITY_SAMPLE_MS) {
+    return false
+  }
+  lastStabilitySampleAt = now
+
+  const canvas = scanCanvasCache.stabilityCanvas || document.createElement('canvas')
+  scanCanvasCache.stabilityCanvas = canvas
+  canvas.width = 64
+  canvas.height = 48
+
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) return true
+
+  context.drawImage(video, 0, 0, canvas.width, canvas.height)
+  const data = context.getImageData(0, 0, canvas.width, canvas.height).data
+  const currentFrame = new Uint8ClampedArray(canvas.width * canvas.height)
+
+  for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
+    currentFrame[pixel] = Math.round((data[index] * 0.299) + (data[index + 1] * 0.587) + (data[index + 2] * 0.114))
+  }
+
+  if (!previousStabilityFrame || previousStabilityFrame.length !== currentFrame.length) {
+    previousStabilityFrame = currentFrame
+    return false
+  }
+
+  let diffTotal = 0
+  for (let index = 0; index < currentFrame.length; index += 1) {
+    diffTotal += Math.abs(currentFrame[index] - previousStabilityFrame[index])
+  }
+  previousStabilityFrame = currentFrame
+
+  return (diffTotal / currentFrame.length) < 14
 }
 
 const decodeCurrentVideoFrame = (video) => {
@@ -1093,25 +1946,82 @@ const decodeCurrentVideoFrame = (video) => {
   const videoHeight = video.videoHeight || 0
   if (!videoWidth || !videoHeight) return ''
 
-  const roiWidth = Math.min(videoWidth * 0.82, videoWidth)
-  const roiHeight = Math.min(videoHeight * 0.5, videoHeight)
-  const roiX = Math.max((videoWidth - roiWidth) / 2, 0)
-  const roiY = Math.max((videoHeight - roiHeight) / 2, 0)
+  const metrics = getAdaptiveFrameMetrics(video)
+  const reader = getCodeReader()
 
-  const roiCanvas = ensureScanCanvas('roiCanvas', Math.round(roiWidth), Math.round(roiHeight))
-  const roiCtx = roiCanvas.getContext('2d', { willReadFrequently: true })
-  roiCtx.drawImage(video, roiX, roiY, roiWidth, roiHeight, 0, 0, roiCanvas.width, roiCanvas.height)
+  const fastCandidates = buildDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+    includeEnhancedAssist: false,
+    includeBinaryAssist: false,
+    includeFullFrame: false,
+    enableTiltAssist: false
+  })
 
-  const roiResult = tryDecodeCanvas(roiCanvas)
-  if (roiResult) return roiResult
+  let decoded = decodeFromCandidates(reader, fastCandidates)
 
-  const fullWidth = Math.min(videoWidth, 1280)
-  const fullHeight = Math.min(videoHeight, 720)
-  const fullCanvas = ensureScanCanvas('fullCanvas', Math.round(fullWidth), Math.round(fullHeight))
-  const fullCtx = fullCanvas.getContext('2d', { willReadFrequently: true })
-  fullCtx.drawImage(video, 0, 0, videoWidth, videoHeight, 0, 0, fullCanvas.width, fullCanvas.height)
+  if (!decoded?.text) {
+    const shouldUseMediumAssist =
+      decodeMissStreak >= 1 ||
+      metrics.lowLight ||
+      metrics.blurry
 
-  return tryDecodeCanvas(fullCanvas)
+    if (shouldUseMediumAssist) {
+      const mediumCandidates = buildDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+        includeEnhancedAssist: true,
+        includeBinaryAssist: decodeMissStreak >= 2 || metrics.lowLight,
+        includeFullFrame: false,
+        enableTiltAssist: decodeMissStreak >= 3 || metrics.blurry
+      })
+
+      decoded = decodeFromCandidates(reader, mediumCandidates)
+    }
+  }
+
+  if (!decoded?.text) {
+    const shouldUseLinearAssist =
+      decodeMissStreak >= 3 ||
+      metrics.blurry ||
+      metrics.lowLight
+
+    if (shouldUseLinearAssist) {
+      const linearCandidates = buildLinearDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+        includeEnhancedAssist: true,
+        includeBinaryAssist: decodeMissStreak >= 5 || metrics.lowLight,
+        includeTiltAssist: decodeMissStreak >= 5 || metrics.blurry
+      })
+
+      decoded = decodeFromCandidates(reader, linearCandidates)
+    }
+  }
+
+  if (!decoded?.text) {
+    const shouldUseHeavyAssist =
+      decodeMissStreak >= 4 ||
+      metrics.lowLight ||
+      metrics.blurry
+
+    if (shouldUseHeavyAssist) {
+      const heavyCandidates = buildDecodeCandidatesFromVideo(video, scanCanvasCache, metrics, {
+        includeEnhancedAssist: true,
+        includeBinaryAssist: true,
+        includeFullFrame: decodeMissStreak >= 6 || metrics.lowLight,
+        enableTiltAssist: true
+      })
+
+      decoded = decodeFromCandidates(reader, heavyCandidates)
+    }
+  }
+
+  if (!decoded?.text) {
+    decodeMissStreak += 1
+    return null
+  }
+
+  decodeMissStreak = 0
+  captureBenchmarkDecode(decoded)
+  return {
+    text: String(decoded.text).trim(),
+    location: decoded.location || null
+  }
 }
 
 const stopScanLoop = () => {
@@ -1130,14 +2040,38 @@ const runEnhancedScanLoop = () => {
   if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
 
   const now = performance.now()
-  if (now - lastDecodeAttemptAt < 90) return
+  if (now - lastDecodeAttemptAt < 75) return
   lastDecodeAttemptAt = now
   if (isHandlingScan.value) return
+  maybeTriggerAutoRoiAssist(video)
 
-  const decodedText = decodeCurrentVideoFrame(video)
-  if (!decodedText) return
+  let benchmarkAttemptRecorded = false
+  if (scannerWorkerReady) {
+    ensureBenchmarkSession('camera')
+    activeBenchmarkSession.value.decodeAttempts += 1
+    benchmarkAttemptRecorded = true
 
-  void handleScanResult(decodedText)
+    const dispatched = dispatchFrameToScannerWorker(video)
+    if (dispatched || scannerWorkerBusy) {
+      return
+    }
+  }
+
+  ensureBenchmarkSession('camera')
+  if (!benchmarkAttemptRecorded) {
+    activeBenchmarkSession.value.decodeAttempts += 1
+  }
+  const frameMetrics = getAdaptiveFrameMetrics(video)
+  captureBenchmarkFrame(frameMetrics)
+  updateScanGuidance(frameMetrics)
+
+  const decoded = decodeCurrentVideoFrame(video)
+  if (!decoded?.text) return
+
+  void handleScanResult(decoded.text, {
+    sourceMode: 'camera',
+    captureLocation: decoded.location || null
+  })
 }
 
 // ZXing 扫码器
@@ -1145,6 +2079,1122 @@ let codeReader = null
 let stream = null
 let scanLoopFrame = null
 let lastDecodeAttemptAt = 0
+let decodeMissStreak = 0
+let lastFrameMetricsAt = 0
+let cachedFrameMetrics = null
+let cameraStartupHintTimer = null
+let videoReadyTimer = null
+let deferredTrackConstraintsTimer = null
+let warmCameraStream = null
+let warmCameraPrimePromise = null
+let warmCameraReleaseTimer = null
+let scannerWorker = null
+let scannerWorkerReady = false
+let scannerWorkerBusy = false
+let scannerWorkerDisabled = false
+let scannerWorkerRequestSeq = 0
+let scannerWorkerGeneration = 0
+let roiAssistEligibleAt = 0
+let lastRoiAssistAt = 0
+let roiAssistStatusTimer = null
+let lastGuidanceUpdateAt = 0
+let lastStabilitySampleAt = 0
+let previousStabilityFrame = null
+
+const showBenchmarkPanel = ref(false)
+const localBenchmarkSessions = ref(loadLocalBenchmarkSessions())
+const rankingSummary = ref(null)
+const isLoadingRankingSummary = ref(false)
+const isExportingRankingCsv = ref(false)
+const rankingExportStatus = ref('')
+
+const FAST_REOPEN_WINDOW_MS = 12000
+
+const clearVideoReadyTimer = () => {
+  if (videoReadyTimer) {
+    clearTimeout(videoReadyTimer)
+    videoReadyTimer = null
+  }
+}
+
+const clearDeferredTrackConstraintsTimer = () => {
+  if (deferredTrackConstraintsTimer) {
+    clearTimeout(deferredTrackConstraintsTimer)
+    deferredTrackConstraintsTimer = null
+  }
+}
+
+const clearWarmCameraReleaseTimer = () => {
+  if (warmCameraReleaseTimer) {
+    clearTimeout(warmCameraReleaseTimer)
+    warmCameraReleaseTimer = null
+  }
+}
+
+const clearRoiAssistStatusTimer = () => {
+  if (roiAssistStatusTimer) {
+    clearTimeout(roiAssistStatusTimer)
+    roiAssistStatusTimer = null
+  }
+}
+
+const setRoiAssistStatus = (message, { autoClearMs = 0 } = {}) => {
+  clearRoiAssistStatusTimer()
+  roiAssistStatus.value = message
+
+  if (autoClearMs > 0) {
+    roiAssistStatusTimer = window.setTimeout(() => {
+      roiAssistStatus.value = ''
+      roiAssistStatusTimer = null
+    }, autoClearMs)
+  }
+}
+
+const resetRoiAssistAutoTimer = () => {
+  roiAssistEligibleAt = Date.now() + ROI_ASSIST_AUTO_DELAY_MS
+}
+
+const captureVideoFrameAsJpeg = (video, {
+  maxWidth = ROI_ASSIST_CAPTURE_MAX_WIDTH,
+  quality = ROI_ASSIST_JPEG_QUALITY
+} = {}) => new Promise((resolve, reject) => {
+  if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    reject(new Error('Live camera frame is not ready.'))
+    return
+  }
+
+  const scale = Math.min(maxWidth / video.videoWidth, 1)
+  const targetWidth = Math.max(1, Math.round(video.videoWidth * scale))
+  const targetHeight = Math.max(1, Math.round(video.videoHeight * scale))
+  const canvas = scanCanvasCache.roiAssistCaptureCanvas || document.createElement('canvas')
+  scanCanvasCache.roiAssistCaptureCanvas = canvas
+  canvas.width = targetWidth
+  canvas.height = targetHeight
+
+  const context = canvas.getContext('2d', { willReadFrequently: false })
+  if (!context) {
+    reject(new Error('Could not create scanner capture canvas.'))
+    return
+  }
+
+  context.drawImage(video, 0, 0, targetWidth, targetHeight)
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      reject(new Error('Could not encode scanner frame.'))
+      return
+    }
+    resolve(blob)
+  }, 'image/jpeg', quality)
+})
+
+const getNormalizedScanFrame = () => {
+  const video = videoRef.value
+  const frame = scanFrameRef.value
+  if (!video || !frame || !video.videoWidth || !video.videoHeight) return null
+
+  const videoRect = video.getBoundingClientRect()
+  const frameRect = frame.getBoundingClientRect()
+  if (!videoRect.width || !videoRect.height || !frameRect.width || !frameRect.height) return null
+
+  const sourceWidth = video.videoWidth
+  const sourceHeight = video.videoHeight
+  const coverScale = Math.max(videoRect.width / sourceWidth, videoRect.height / sourceHeight)
+  const renderedWidth = sourceWidth * coverScale
+  const renderedHeight = sourceHeight * coverScale
+  const renderedLeft = videoRect.left + ((videoRect.width - renderedWidth) / 2)
+  const renderedTop = videoRect.top + ((videoRect.height - renderedHeight) / 2)
+
+  const sourceLeft = (frameRect.left - renderedLeft) / coverScale
+  const sourceTop = (frameRect.top - renderedTop) / coverScale
+  const sourceRight = (frameRect.right - renderedLeft) / coverScale
+  const sourceBottom = (frameRect.bottom - renderedTop) / coverScale
+
+  const left = Math.max(0, Math.min(sourceWidth, sourceLeft))
+  const top = Math.max(0, Math.min(sourceHeight, sourceTop))
+  const right = Math.max(0, Math.min(sourceWidth, sourceRight))
+  const bottom = Math.max(0, Math.min(sourceHeight, sourceBottom))
+  const width = Math.max(1, right - left)
+  const height = Math.max(1, bottom - top)
+
+  return {
+    x: Number((left / sourceWidth).toFixed(5)),
+    y: Number((top / sourceHeight).toFixed(5)),
+    width: Number((width / sourceWidth).toFixed(5)),
+    height: Number((height / sourceHeight).toFixed(5)),
+    reference: 'scan_frame'
+  }
+}
+
+const fetchWithTimeout = async (url, options = {}, timeoutMs = ROI_ASSIST_TIMEOUT_MS) => {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+  }
+
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const extractRoiDecodedText = (candidate) => {
+  const directText = String(candidate?.decoded_text || '').trim()
+  if (directText) return directText
+
+  const decodedTexts = Array.isArray(candidate?.decoded_texts) ? candidate.decoded_texts : []
+  const firstText = decodedTexts.find((text) => String(text || '').trim())
+  return firstText ? String(firstText).trim() : ''
+}
+
+const normalizeRoiCandidate = (candidate, index = 0) => {
+  const decodedText = extractRoiDecodedText(candidate)
+  return {
+    ...candidate,
+    candidate_id: candidate?.candidate_id || `roi-${index + 1}`,
+    decoded_text: decodedText,
+    score: Number(candidate?.score || 0),
+    confidence: candidate?.confidence == null ? null : Number(candidate.confidence)
+  }
+}
+
+const buildLocationFromRoiCandidate = (candidate) => {
+  const points = normalizeCapturePoints(candidate?.points || candidate?.detection?.points)
+  const imageWidth = Number(
+    candidate?.image_width ||
+    candidate?.imageWidth ||
+    candidate?.frameWidth ||
+    candidate?.source_width ||
+    0
+  )
+  const imageHeight = Number(
+    candidate?.image_height ||
+    candidate?.imageHeight ||
+    candidate?.frameHeight ||
+    candidate?.source_height ||
+    0
+  )
+
+  if (!points.length || !imageWidth || !imageHeight) return null
+
+  return {
+    source: 'roi-assist',
+    points,
+    imageWidth,
+    imageHeight
+  }
+}
+
+const collectSuccessfulRoiCandidates = (payload) => {
+  const rawCandidates = Array.isArray(payload?.candidates) ? payload.candidates : []
+  const normalized = rawCandidates
+    .map((candidate, index) => normalizeRoiCandidate(candidate, index))
+    .filter((candidate) => candidate.success && candidate.decoded_text)
+
+  if (!normalized.length && Array.isArray(payload?.decoded_texts)) {
+    return payload.decoded_texts
+      .map((text, index) => normalizeRoiCandidate({
+        candidate_id: `roi-fallback-${index + 1}`,
+        decoded_text: text,
+        decoded_texts: [text],
+        decoded_types: payload.decoded_types || [],
+        class_name: payload.method || 'ROI',
+        source: payload.method || 'roi_assist',
+        success: true,
+        score: index === 0 ? 0.6 : 0.5
+      }, index))
+      .filter((candidate) => candidate.decoded_text)
+  }
+
+  const deduped = []
+  const seen = new Set()
+  normalized
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .forEach((candidate) => {
+      if (seen.has(candidate.decoded_text)) return
+      seen.add(candidate.decoded_text)
+      deduped.push(candidate)
+    })
+
+  return deduped
+}
+
+const resolveRoiCandidateType = (candidate) => {
+  const text = String(candidate?.decoded_text || '').trim()
+  try {
+    const parsed = JSON.parse(text)
+    if (parsed?.type) return String(parsed.type).replaceAll('_', ' ')
+    if (parsed?.lot_number) return 'LOT'
+    if (parsed?.bin || parsed?.bin_code) return 'BIN'
+    if (parsed?.sku || parsed?.id) return 'ITEM'
+  } catch (_error) {
+    // Plain barcodes are expected; JSON labels are only one supported format.
+  }
+
+  if (/^LOT-/i.test(text)) return 'LOT'
+  if (/^\d{8,14}$/.test(text)) return 'ITEM'
+
+  const className = String(candidate?.class_name || '').toLowerCase()
+  if (className.includes('qr')) return 'QR'
+  if (className.includes('bar')) return 'BARCODE'
+  return 'CODE'
+}
+
+const normalizeRoiCandidateType = (candidate) => {
+  const displayType = String(candidate?.display?.entityType || '').trim().toUpperCase()
+  if (displayType) return displayType.replace(/\s+/g, '_')
+  return String(resolveRoiCandidateType(candidate) || 'CODE').trim().toUpperCase().replace(/\s+/g, '_')
+}
+
+const clampScore = (value, fallback = 0) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return fallback
+  return Math.min(Math.max(numericValue, 0), 1)
+}
+
+const getRoiOperationContext = () => String(scanAction.value || 'SCAN').trim().toUpperCase()
+
+const typeMatchScoreByContext = (type, operationContext) => {
+  const normalizedType = String(type || 'CODE').toUpperCase()
+  const normalizedContext = String(operationContext || 'SCAN').toUpperCase()
+
+  const matrix = {
+    OUTBOUND: { LOT: 1, ITEM: 0.82, BARCODE: 0.7, QR: 0.68, BIN: 0.22, CODE: 0.35 },
+    MOVE: { LOT: 1, ITEM: 0.72, BARCODE: 0.58, QR: 0.56, BIN: 0.28, CODE: 0.32 },
+    INBOUND: { ITEM: 1, BARCODE: 0.86, QR: 0.78, LOT: 0.62, BIN: 0.4, CODE: 0.48 },
+    COUNT: { LOT: 1, ITEM: 0.92, BIN: 0.86, BARCODE: 0.8, QR: 0.78, CODE: 0.45 },
+    CREATE_ITEM: { ITEM: 0.95, BARCODE: 0.88, QR: 0.72, CODE: 0.62, LOT: 0.3, BIN: 0.25 },
+    SCAN: { LOT: 0.88, ITEM: 0.86, BIN: 0.76, BARCODE: 0.72, QR: 0.7, CODE: 0.45 }
+  }
+
+  const contextScores = matrix[normalizedContext] || matrix.SCAN
+  return contextScores[normalizedType] ?? contextScores.CODE ?? 0.45
+}
+
+const getCandidateSightingScore = (candidate) => {
+  const key = extractRoiDecodedText(candidate)
+  if (!key) return 0.35
+
+  const now = Date.now()
+  const previous = roiCandidateSightings.get(key)
+  const count = previous && now - previous.lastSeenAt < 12000 ? previous.count + 1 : 1
+  roiCandidateSightings.set(key, { count, lastSeenAt: now })
+  return clampScore(0.34 + (Math.min(count, 4) * 0.16), 0.5)
+}
+
+const getRoiCandidateRiskPenalty = (candidate, type) => {
+  const raw = extractRoiDecodedText(candidate)
+  let penalty = 0
+
+  if (!raw) penalty += 0.55
+  if (raw && raw.length < 4) penalty += 0.32
+  if ([...raw].some((character) => character.charCodeAt(0) <= 31)) penalty += 0.3
+  if (raw && !/^[\w\s\-:{}[\]",.;:/]+$/u.test(raw)) penalty += 0.22
+  if (type === 'CODE' && candidate?.display?.found === false) penalty += 0.18
+  if (String(raw).includes('$') || String(raw).includes('�')) penalty += 0.28
+
+  return clampScore(penalty)
+}
+
+const explainRoiSelection = (parts, riskPenalty, type, displayFound) => {
+  const reasons = []
+
+  if (parts.type >= 0.85) reasons.push(`${type} fits this action`)
+  if (parts.center >= 0.78) reasons.push('near scan center')
+  if (parts.database >= 0.9) reasons.push('matched warehouse data')
+  if (parts.ml >= 0.72) reasons.push('learned selection pattern')
+  if (parts.quality >= 0.72) reasons.push('clear ROI')
+  if (parts.feedback >= 0.28) reasons.push('selected before')
+  if (parts.confidence >= 0.82) reasons.push('high detect confidence')
+  if (displayFound === false) reasons.push('not in master data')
+  if (riskPenalty >= 0.22) reasons.push('possible noisy decode')
+
+  return reasons.slice(0, 4)
+}
+
+const scoreRoiCandidateForSelection = (candidate, index = 0, operationContext = getRoiOperationContext()) => {
+  const type = normalizeRoiCandidateType(candidate)
+  const centerScore = Number.isFinite(Number(candidate?.center_distance_ratio))
+    ? clampScore(1 - Number(candidate.center_distance_ratio))
+    : 0.52
+  const confidenceScore = clampScore(candidate?.confidence, candidate?.confidence == null ? 0.55 : 0)
+  const roiScore = clampScore(candidate?.score, 0.5)
+  const qualityScore = clampScore(candidate?.quality_score, 0.55)
+  const areaScore = Number.isFinite(Number(candidate?.detection_area_ratio))
+    ? clampScore(Math.sqrt(Math.max(Number(candidate.detection_area_ratio), 0)) * 4)
+    : 0.45
+  const displayFound = candidate?.display?.found
+  const databaseScore = displayFound === true ? 1 : displayFound === false ? 0.2 : 0.55
+  const typeScore = typeMatchScoreByContext(type, operationContext)
+  const stabilityScore = getCandidateSightingScore(candidate)
+  const feedbackScore = clampScore(candidate?.feedback_score, 0)
+  const mlScore = Number.isFinite(Number(candidate?.ml_score))
+    ? clampScore(Number(candidate.ml_score), 0.5)
+    : null
+  const mlWeight = mlScore == null ? 0 : candidate?.ml_reliable ? 0.28 : 0.12
+  const riskPenalty = getRoiCandidateRiskPenalty(candidate, type)
+
+  const parts = {
+    type: typeScore,
+    center: centerScore,
+    confidence: confidenceScore,
+    quality: (qualityScore * 0.64) + (areaScore * 0.36),
+    database: databaseScore,
+    stability: stabilityScore,
+    roi: roiScore,
+    feedback: feedbackScore,
+    ml: mlScore ?? 0.5
+  }
+
+  const baseWeightedScore = (
+    parts.type * 0.28 +
+    parts.center * 0.22 +
+    parts.database * 0.18 +
+    parts.quality * 0.14 +
+    parts.confidence * 0.1 +
+    parts.stability * 0.05 +
+    parts.roi * 0.03
+  )
+  const scoreBeforeMl = (baseWeightedScore * 0.92) + (parts.feedback * 0.08)
+  const weightedScore = mlScore == null
+    ? scoreBeforeMl
+    : (scoreBeforeMl * (1 - mlWeight)) + (mlScore * mlWeight)
+  const selectionScore = clampScore(weightedScore - (riskPenalty * 0.32))
+
+  return {
+    ...candidate,
+    selection_type: type,
+    selection_score: Number(selectionScore.toFixed(4)),
+    selection_score_percent: Math.round(selectionScore * 100),
+    selection_risk_penalty: Number(riskPenalty.toFixed(4)),
+    selection_features: {
+      operation_context: operationContext,
+      type_score: Number(parts.type.toFixed(4)),
+      center_score: Number(parts.center.toFixed(4)),
+      database_score: Number(parts.database.toFixed(4)),
+      quality_score: Number(parts.quality.toFixed(4)),
+      confidence_score: Number(parts.confidence.toFixed(4)),
+      stability_score: Number(parts.stability.toFixed(4)),
+      roi_score: Number(parts.roi.toFixed(4)),
+      feedback_score: Number(parts.feedback.toFixed(4)),
+      ml_score: mlScore == null ? null : Number(mlScore.toFixed(4)),
+      ml_weight: Number(mlWeight.toFixed(4)),
+      ml_model_status: candidate?.ml_model_status || null,
+      risk_penalty: Number(riskPenalty.toFixed(4)),
+      original_index: index
+    },
+    selection_reasons: explainRoiSelection(parts, riskPenalty, type, displayFound)
+  }
+}
+
+const rankRoiCandidatesForSelection = (candidates, operationContext = getRoiOperationContext()) => {
+  return [...candidates]
+    .map((candidate, index) => scoreRoiCandidateForSelection(candidate, index, operationContext))
+    .sort((left, right) => {
+      const scoreDiff = Number(right.selection_score || 0) - Number(left.selection_score || 0)
+      if (Math.abs(scoreDiff) > 0.0001) return scoreDiff
+      return Number(right.score || 0) - Number(left.score || 0)
+    })
+    .map((candidate, index, sortedCandidates) => ({
+      ...candidate,
+      selection_rank: index + 1,
+      selection_score_margin: index === 0 && sortedCandidates[1]
+        ? Number((Number(candidate.selection_score || 0) - Number(sortedCandidates[1].selection_score || 0)).toFixed(4))
+        : null
+    }))
+}
+
+const shouldAutoSelectRoiCandidate = (candidates) => {
+  if (!Array.isArray(candidates) || candidates.length < 2) return false
+  const [topCandidate, secondCandidate] = candidates
+  const topScore = Number(topCandidate?.selection_score || 0)
+  const secondScore = Number(secondCandidate?.selection_score || 0)
+  const scoreMargin = topScore - secondScore
+
+  return topScore >= MULTI_CODE_AUTO_SELECT_MIN_SCORE &&
+    scoreMargin >= MULTI_CODE_AUTO_SELECT_MIN_MARGIN &&
+    topCandidate?.display?.found !== false &&
+    Number(topCandidate?.selection_risk_penalty || 0) < 0.22
+}
+
+const sanitizeRoiSelectionCandidate = (candidate) => ({
+  candidate_id: candidate?.candidate_id || '',
+  decoded_text: extractRoiDecodedText(candidate),
+  decoded_types: candidate?.decoded_types || [],
+  class_name: candidate?.class_name || '',
+  selection_type: candidate?.selection_type || normalizeRoiCandidateType(candidate),
+  selection_score: candidate?.selection_score ?? null,
+  selection_score_percent: candidate?.selection_score_percent ?? null,
+  selection_rank: candidate?.selection_rank ?? null,
+  selection_score_margin: candidate?.selection_score_margin ?? null,
+  selection_risk_penalty: candidate?.selection_risk_penalty ?? null,
+  selection_features: candidate?.selection_features || {},
+  selection_reasons: candidate?.selection_reasons || [],
+  confidence: candidate?.confidence ?? null,
+  score: candidate?.score ?? null,
+  center_distance_ratio: candidate?.center_distance_ratio ?? null,
+  detection_area_ratio: candidate?.detection_area_ratio ?? null,
+  quality_score: candidate?.quality_score ?? null,
+  feedback_score: candidate?.feedback_score ?? null,
+  feedback_signal: candidate?.feedback_signal || null,
+  ml_score: candidate?.ml_score ?? null,
+  ml_model_status: candidate?.ml_model_status || null,
+  ml_model_version: candidate?.ml_model_version || null,
+  ml_reliable: Boolean(candidate?.ml_reliable),
+  best_preprocessing_mode: candidate?.best_preprocessing_mode || '',
+  points: candidate?.points || candidate?.detection?.points || [],
+  detection: candidate?.detection || null,
+  image_width: candidate?.image_width ?? candidate?.imageWidth ?? candidate?.frameWidth ?? candidate?.source_width ?? null,
+  image_height: candidate?.image_height ?? candidate?.imageHeight ?? candidate?.frameHeight ?? candidate?.source_height ?? null,
+  imageWidth: candidate?.imageWidth ?? null,
+  imageHeight: candidate?.imageHeight ?? null,
+  frameWidth: candidate?.frameWidth ?? null,
+  frameHeight: candidate?.frameHeight ?? null,
+  source_width: candidate?.source_width ?? null,
+  source_height: candidate?.source_height ?? null,
+  display: candidate?.display || null
+})
+
+const inferClientDeviceType = () => {
+  const ua = window.navigator.userAgent || ''
+  if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad'
+  if (/iPhone/i.test(ua)) return 'iPhone'
+  if (/Android/i.test(ua)) return 'Android'
+  if (/Mobile/i.test(ua)) return 'Mobile'
+  return 'Desktop'
+}
+
+const loadLocalSelectionSamples = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SCANNER_SELECTION_STORAGE_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.slice(0, 80) : []
+  } catch (_error) {
+    return []
+  }
+}
+
+const saveLocalSelectionSample = (sample) => {
+  const nextSamples = [sample, ...loadLocalSelectionSamples()]
+    .filter(Boolean)
+    .slice(0, 80)
+  localStorage.setItem(SCANNER_SELECTION_STORAGE_KEY, JSON.stringify(nextSamples))
+}
+
+const recordRoiSelectionFeedback = async ({
+  selectedCandidate = null,
+  candidates = [],
+  trigger = 'manual',
+  decisionType = 'user_selected'
+} = {}) => {
+  if (!Array.isArray(candidates) || !candidates.length) return
+
+  const now = new Date()
+  const activeSession = activeBenchmarkSession.value
+  const sample = {
+    session_id: activeSession?.id || `selection-${Date.now()}`,
+    trigger,
+    operation_context: getRoiOperationContext(),
+    device_type: inferClientDeviceType(),
+    started_at: activeSession?.startedAt || now.toISOString(),
+    confirmed_at: now.toISOString(),
+    confirmation_time_ms: activeSession?.startPerf
+      ? Math.round(performance.now() - activeSession.startPerf)
+      : null,
+    selected_candidate_id: selectedCandidate?.candidate_id || null,
+    decision_type: decisionType,
+    candidates: candidates.map(sanitizeRoiSelectionCandidate),
+    created_at: now.toISOString()
+  }
+
+  saveLocalSelectionSample(sample)
+
+  const token = localStorage.getItem('token')
+  if (!token) return
+
+  try {
+    await fetch('/api/scanner/roi-assist/selection-feedback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(sample),
+      keepalive: true
+    })
+  } catch (error) {
+    console.warn('[ROI Assist] selection feedback save failed', error)
+  }
+}
+
+const formatRoiCandidateMeta = (candidate) => {
+  const display = candidate?.display || {}
+  const pieces = []
+  if (Number.isFinite(candidate?.selection_score_percent)) {
+    pieces.push(`${candidate.selection_score_percent}% selection`)
+  }
+  const className = display.entityType || (candidate?.class_name ? String(candidate.class_name).replaceAll('_', ' ') : '')
+  if (className) pieces.push(className)
+  if (Number.isFinite(candidate?.confidence)) {
+    pieces.push(`${Math.round(candidate.confidence * 100)}% detect`)
+  }
+  if (Number.isFinite(candidate?.score)) {
+    pieces.push(`${Math.round(candidate.score * 100)} score`)
+  }
+  if (Number.isFinite(candidate?.center_distance_ratio)) {
+    const centerScore = Math.max(0, Math.min(1, 1 - candidate.center_distance_ratio))
+    pieces.push(`${Math.round(centerScore * 100)}% centered`)
+  }
+  if (Number(candidate?.feedback_signal?.shown_count || 0) > 0) {
+    pieces.push(`${candidate.feedback_signal.selected_count || 0}/${candidate.feedback_signal.shown_count} selected`)
+  }
+  if (Number.isFinite(Number(candidate?.ml_score))) {
+    const modelStatus = candidate?.ml_model_status === 'warmup' ? ' ML warmup' : ' ML'
+    pieces.push(`${Math.round(Number(candidate.ml_score) * 100)}%${modelStatus}`)
+  }
+  if (candidate?.best_preprocessing_mode) {
+    pieces.push(candidate.best_preprocessing_mode)
+  }
+  return pieces.join(' · ') || 'ROI Assist candidate'
+}
+
+const formatRoiCandidateSelectionReason = (candidate) => {
+  const reasons = Array.isArray(candidate?.selection_reasons) ? candidate.selection_reasons : []
+  return reasons.length ? reasons.join(' · ') : ''
+}
+
+const formatRoiCandidateTitle = (candidate) => {
+  const displayTitle = String(candidate?.display?.title || '').trim()
+  if (displayTitle) return displayTitle
+
+  const decodedText = extractRoiDecodedText(candidate)
+  try {
+    const parsed = JSON.parse(decodedText)
+    if (parsed?.type && (parsed?.id || parsed?.sku || parsed?.lot_number || parsed?.bin_code)) {
+      return `${parsed.type}: ${parsed.id || parsed.sku || parsed.lot_number || parsed.bin_code}`
+    }
+  } catch (_error) {
+    // Plain barcode fallback below.
+  }
+
+  return decodedText || 'Unknown label'
+}
+
+const formatRoiCandidateSubtitle = (candidate) => {
+  const displaySubtitle = String(candidate?.display?.subtitle || '').trim()
+  if (displaySubtitle) return displaySubtitle
+
+  const type = resolveRoiCandidateType(candidate)
+  const decodedText = extractRoiDecodedText(candidate)
+  if (type === 'ITEM' && /^\d{8,14}$/.test(decodedText)) return `SKU ${decodedText}`
+  return type === 'CODE' ? 'Scanned label' : `${type} label`
+}
+
+const formatRoiCandidatePrimary = (candidate) => {
+  const display = candidate?.display || {}
+  const primary = String(display.primary || '').trim()
+  const secondary = String(display.secondary || '').trim()
+  if (primary && secondary) return `${primary} · ${secondary}`
+  return primary || secondary
+}
+
+const formatRoiCandidateRaw = (candidate) => extractRoiDecodedText(candidate)
+
+const shouldShowRoiCandidateRaw = (candidate) => {
+  const raw = formatRoiCandidateRaw(candidate)
+  if (!raw) return false
+  const title = formatRoiCandidateTitle(candidate)
+  const subtitle = formatRoiCandidateSubtitle(candidate)
+  return raw !== title && raw !== subtitle
+}
+
+const enrichRoiCandidates = async (candidates) => {
+  if (!candidates.length) return candidates
+
+  const token = localStorage.getItem('token')
+  if (!token) return candidates
+
+  try {
+    const response = await fetch('/api/scanner/roi-assist/resolve-candidates', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        operation_context: getRoiOperationContext(),
+        candidates: candidates.map((candidate) => ({
+          candidate_id: candidate.candidate_id,
+          decoded_text: candidate.decoded_text,
+          decoded_texts: candidate.decoded_texts,
+          decoded_types: candidate.decoded_types,
+          class_name: candidate.class_name,
+          confidence: candidate.confidence,
+          score: candidate.score,
+          center_distance_ratio: candidate.center_distance_ratio,
+          center_reference: candidate.center_reference,
+          detection_area_ratio: candidate.detection_area_ratio,
+          quality_score: candidate.quality_score,
+          best_preprocessing_mode: candidate.best_preprocessing_mode,
+          source: candidate.source,
+          points: candidate.points,
+          detection: candidate.detection,
+          image_width: candidate.image_width,
+          image_height: candidate.image_height,
+          imageWidth: candidate.imageWidth,
+          imageHeight: candidate.imageHeight,
+          frameWidth: candidate.frameWidth,
+          frameHeight: candidate.frameHeight
+        }))
+      })
+    })
+
+    const payload = await response.json().catch(() => null)
+    if (!response.ok || !payload?.success || !Array.isArray(payload.candidates)) {
+      const message = payload?.message || payload?.error || `HTTP ${response.status}`
+      if (isAuthFailure(response.status, message)) {
+        handleAuthFailure(message)
+      }
+      return candidates
+    }
+
+    if (payload.ranking_model) {
+      console.info('[ROI Assist] ranking model', payload.ranking_model)
+    }
+    const resolvedById = new Map(payload.candidates.map((candidate) => [candidate.candidate_id, candidate]))
+    return candidates.map((candidate) => resolvedById.get(candidate.candidate_id) || candidate)
+  } catch (error) {
+    console.warn('[ROI Assist] candidate enrichment failed', error)
+    return candidates
+  }
+}
+
+const dismissMultiCodePicker = () => {
+  const currentCandidates = [...roiAssistCandidates.value]
+  showMultiCodePicker.value = false
+  roiAssistCandidates.value = []
+  void recordRoiSelectionFeedback({
+    selectedCandidate: null,
+    candidates: currentCandidates,
+    trigger: 'manual',
+    decisionType: 'dismissed'
+  })
+  setRoiAssistStatus('Selection cancelled. Keep scanning when ready.', { autoClearMs: 1800 })
+  resetRoiAssistAutoTimer()
+  resumeOutboundLiveDecoding()
+}
+
+const selectRoiCandidate = async (candidate) => {
+  const decodedText = extractRoiDecodedText(candidate)
+  if (!decodedText) return
+
+  showMultiCodePicker.value = false
+  const currentCandidates = [...roiAssistCandidates.value]
+  roiAssistCandidates.value = []
+  setRoiAssistStatus('Target label selected.', { autoClearMs: 1400 })
+  void recordRoiSelectionFeedback({
+    selectedCandidate: candidate,
+    candidates: currentCandidates.length ? currentCandidates : [candidate],
+    trigger: 'manual',
+    decisionType: 'user_selected'
+  })
+  captureBenchmarkDecode({
+    label: 'roi-assist-selected',
+    format: candidate?.decoded_types?.[0] || candidate?.class_name || '',
+    engine: 'ROI Assist'
+  })
+  await handleScanResult(decodedText, {
+    bypassCooldown: true,
+    sourceMode: 'roi-assist',
+    captureLocation: buildLocationFromRoiCandidate(candidate)
+  })
+}
+
+const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
+  const enrichedCandidates = await enrichRoiCandidates(collectSuccessfulRoiCandidates(payload))
+  const candidates = rankRoiCandidatesForSelection(
+    enrichedCandidates,
+    String(payload?.operation_context || getRoiOperationContext() || 'SCAN').toUpperCase()
+  )
+  const leadingLocation = buildLocationFromRoiCandidate(candidates[0])
+
+  if (candidates.length > 1) {
+    if (shouldAutoSelectRoiCandidate(candidates)) {
+      const candidate = candidates[0]
+      void recordRoiSelectionFeedback({
+        selectedCandidate: candidate,
+        candidates,
+        trigger,
+        decisionType: 'auto_selected'
+      })
+      setRoiAssistStatus('Best label selected automatically.', { autoClearMs: 1800 })
+      captureBenchmarkDecode({
+        label: 'roi-assist-auto-selected',
+        format: candidate?.decoded_types?.[0] || candidate?.class_name || '',
+        engine: 'ROI Assist'
+      })
+      await handleScanResult(candidate.decoded_text, {
+        bypassCooldown: true,
+        sourceMode: 'roi-assist',
+        captureLocation: buildLocationFromRoiCandidate(candidate)
+      })
+      return
+    }
+
+    roiAssistCandidates.value = candidates
+    showMultiCodePicker.value = true
+    showScanCapturePulse('Labels found', leadingLocation)
+    setRoiAssistStatus(`${candidates.length} labels found. Choose the target label.`, { autoClearMs: 2400 })
+    stopScanLoop()
+    if (videoRef.value && !videoRef.value.paused) {
+      videoRef.value.pause()
+    }
+    return
+  }
+
+  if (candidates.length === 1) {
+    const candidate = candidates[0]
+    setRoiAssistStatus(
+      trigger === 'auto' ? 'Enhanced scan found a label.' : 'ROI Assist found a label.',
+      { autoClearMs: 1800 }
+    )
+    captureBenchmarkDecode({
+      label: 'roi-assist',
+      format: candidate?.decoded_types?.[0] || candidate?.class_name || '',
+      engine: 'ROI Assist'
+    })
+    await handleScanResult(candidate.decoded_text, {
+      bypassCooldown: true,
+      sourceMode: 'roi-assist',
+      captureLocation: buildLocationFromRoiCandidate(candidate)
+    })
+    return
+  }
+
+  setRoiAssistStatus('Move closer or hold steady.', { autoClearMs: 2200 })
+  scanGuidanceMessage.value = 'Move closer or hold steady'
+}
+
+const triggerRoiAssist = async (trigger = 'manual') => {
+  if (isRoiAssistRunning.value || !isScanning.value || !videoRef.value) return
+  if (showMultiCodePicker.value || scanResult.value || hasInteractiveModalOpen.value) return
+
+  isRoiAssistRunning.value = true
+  lastRoiAssistAt = Date.now()
+  setRoiAssistStatus(trigger === 'auto' ? 'Trying enhanced scan...' : 'Running ROI Assist...')
+  scanGuidanceMessage.value = trigger === 'auto'
+    ? 'Enhanced scan is checking this frame...'
+    : 'ROI Assist is checking this frame...'
+
+  try {
+    const frameBlob = await captureVideoFrameAsJpeg(videoRef.value)
+    if (!isScanning.value || scanResult.value || showMultiCodePicker.value) return
+
+    const formData = new FormData()
+    formData.append('frame', frameBlob, 'scanner-frame.jpg')
+    formData.append('mode', 'obb')
+    formData.append('trigger', trigger)
+    formData.append('operation_context', scanAction.value || 'scan')
+    const scanFrame = getNormalizedScanFrame()
+    if (scanFrame) {
+      formData.append('scan_frame', JSON.stringify(scanFrame))
+    }
+
+    const startedAt = performance.now()
+    const response = await fetchWithTimeout('/api/scanner/roi-assist', {
+      method: 'POST',
+      body: formData
+    })
+    const payload = await response.json().catch(() => null)
+
+    console.log('[ROI Assist] finished', {
+      trigger,
+      ok: response.ok,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      serverMs: payload?.processing_time_ms,
+      candidates: payload?.candidates?.length || 0,
+      success: payload?.success
+    })
+
+    if (!response.ok || !payload) {
+      throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`)
+    }
+
+    await handleRoiAssistPayload(payload, trigger)
+  } catch (error) {
+    console.warn('[ROI Assist] failed', error)
+    if (trigger === 'manual') {
+      setRoiAssistStatus(`ROI Assist failed: ${error?.message || 'unknown error'}`, { autoClearMs: 2600 })
+    } else {
+      setRoiAssistStatus('', { autoClearMs: 0 })
+    }
+  } finally {
+    isRoiAssistRunning.value = false
+    resetRoiAssistAutoTimer()
+  }
+}
+
+const maybeTriggerAutoRoiAssist = (video) => {
+  if (!isScanning.value || isRoiAssistRunning.value || !video) return
+  if (scanResult.value || showMultiCodePicker.value || shouldSuspendLiveScanner.value) return
+  if (Date.now() < roiAssistEligibleAt) return
+  if (Date.now() - lastRoiAssistAt < ROI_ASSIST_COOLDOWN_MS) return
+  if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
+  if (decodeMissStreak < 8) return
+  if (!isFrameStableForAssist(video)) {
+    scanGuidanceMessage.value = 'Hold steady for enhanced scan'
+    return
+  }
+
+  void triggerRoiAssist('auto')
+}
+
+const shouldDisableBarcodeDetectorOnPlatform = () => {
+  const ua = window.navigator.userAgent || window.navigator.vendor || ''
+  const isIOSLike = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && window.navigator.maxTouchPoints > 1)
+  if (!isIOSLike) return false
+
+  const match = ua.match(/OS (\d+)_/i)
+  if (!match) return false
+
+  return Number(match[1]) >= 18
+}
+
+const handleScannerWorkerMessage = (event) => {
+  const payload = event.data || {}
+
+  if (payload.type === 'ready') {
+    scannerWorkerReady = true
+    scannerWorkerBusy = false
+    return
+  }
+
+  if (payload.type !== 'frame-result') return
+
+  scannerWorkerBusy = false
+
+  if (!isScanning.value) return
+  if (payload.generation !== scannerWorkerGeneration) return
+
+  if (payload.metrics) {
+    cachedFrameMetrics = payload.metrics
+    lastFrameMetricsAt = performance.now()
+    captureBenchmarkFrame(payload.metrics)
+    updateScanGuidance(payload.metrics)
+  }
+
+  if (payload.decodedText) {
+    decodeMissStreak = 0
+    captureBenchmarkDecode({
+      label: payload.decodePath,
+      format: payload.decodedFormat,
+      engine: payload.decodeEngine,
+      fillRatio: payload.fillRatio
+    })
+    void handleScanResult(payload.decodedText, {
+      sourceMode: 'camera',
+      captureLocation: payload.location || null
+    })
+    return
+  }
+
+  decodeMissStreak = Number.isFinite(payload.missStreak) ? payload.missStreak : (decodeMissStreak + 1)
+}
+
+const disableScannerWorker = (error) => {
+  if (error) {
+    console.warn('Scanner worker is unavailable. Falling back to the main-thread scanner.', error)
+  }
+
+  scannerWorkerReady = false
+  scannerWorkerBusy = false
+  scannerWorkerDisabled = true
+
+  if (scannerWorker) {
+    scannerWorker.terminate()
+    scannerWorker = null
+  }
+}
+
+const initializeScannerWorker = () => {
+  if (scannerWorker || scannerWorkerDisabled || typeof Worker === 'undefined') return
+
+  try {
+    scannerWorker = new Worker(
+      new URL('../workers/scanner.worker.js', import.meta.url),
+      { type: 'module' }
+    )
+    scannerWorker.onmessage = handleScannerWorkerMessage
+    scannerWorker.onerror = (error) => {
+      disableScannerWorker(error)
+    }
+    scannerWorker.postMessage({
+      type: 'init',
+      disableBarcodeDetector: shouldDisableBarcodeDetectorOnPlatform()
+    })
+  } catch (error) {
+    disableScannerWorker(error)
+  }
+}
+
+const resetScannerWorkerState = () => {
+  scannerWorkerBusy = false
+  scannerWorkerGeneration += 1
+
+  if (scannerWorker) {
+    scannerWorker.postMessage({
+      type: 'reset'
+    })
+  }
+}
+
+const buildWorkerFramePayload = async (video) => {
+  const sourceWidth = video.videoWidth || 0
+  const sourceHeight = video.videoHeight || 0
+  if (!sourceWidth || !sourceHeight) return null
+
+  const scale = Math.min(
+    WORKER_CAPTURE_MAX_WIDTH / sourceWidth,
+    WORKER_CAPTURE_MAX_HEIGHT / sourceHeight,
+    1
+  )
+  const targetWidth = Math.max(1, Math.round(sourceWidth * scale))
+  const targetHeight = Math.max(1, Math.round(sourceHeight * scale))
+
+  if (typeof window.createImageBitmap === 'function') {
+    try {
+      const imageBitmap = await window.createImageBitmap(video, {
+        resizeWidth: targetWidth,
+        resizeHeight: targetHeight,
+        resizeQuality: 'high'
+      })
+
+      return {
+        width: targetWidth,
+        height: targetHeight,
+        imageBitmap,
+        transferables: [imageBitmap]
+      }
+    } catch (error) {
+      console.warn('Falling back to ImageData worker payload after ImageBitmap capture failed.', error)
+    }
+  }
+
+  const captureCanvas = scanCanvasCache.workerCaptureCanvas || document.createElement('canvas')
+  scanCanvasCache.workerCaptureCanvas = captureCanvas
+  if (captureCanvas.width !== targetWidth) captureCanvas.width = targetWidth
+  if (captureCanvas.height !== targetHeight) captureCanvas.height = targetHeight
+
+  const captureContext = captureCanvas.getContext('2d', { willReadFrequently: true })
+  if (!captureContext) return null
+
+  captureContext.drawImage(video, 0, 0, targetWidth, targetHeight)
+  const imageData = captureContext.getImageData(0, 0, targetWidth, targetHeight)
+
+  return {
+    width: targetWidth,
+    height: targetHeight,
+    buffer: imageData.data.buffer,
+    transferables: [imageData.data.buffer]
+  }
+}
+
+const dispatchFrameToScannerWorker = (video) => {
+  if (!scannerWorker || !scannerWorkerReady || scannerWorkerBusy) return false
+
+  scannerWorkerBusy = true
+  scannerWorkerRequestSeq += 1
+  const requestId = scannerWorkerRequestSeq
+  const generation = scannerWorkerGeneration
+  const missStreak = decodeMissStreak
+
+  void (async () => {
+    let framePayload = null
+
+    try {
+      framePayload = await buildWorkerFramePayload(video)
+      if (!framePayload) {
+        scannerWorkerBusy = false
+        return
+      }
+
+      if (!scannerWorker || !scannerWorkerReady || !isScanning.value || generation !== scannerWorkerGeneration) {
+        framePayload.imageBitmap?.close?.()
+        scannerWorkerBusy = false
+        return
+      }
+
+      scannerWorker.postMessage({
+        type: 'decode-frame',
+        requestId,
+        generation,
+        missStreak,
+        ...framePayload
+      }, framePayload.transferables || [])
+    } catch (error) {
+      framePayload?.imageBitmap?.close?.()
+      scannerWorkerBusy = false
+      disableScannerWorker(error)
+    }
+  })()
+
+  return true
+}
+
+const isReusableCameraStream = (mediaStream) => {
+  if (!mediaStream) return false
+  return mediaStream.getTracks().every((track) => track.readyState === 'live')
+}
+
+const releaseWarmCameraStream = () => {
+  clearWarmCameraReleaseTimer()
+  if (warmCameraStream) {
+    safeStopStream(warmCameraStream)
+    warmCameraStream = null
+  }
+}
+
+const preserveCameraForFastReopen = (mediaStream) => {
+  if (!isReusableCameraStream(mediaStream)) {
+    safeStopStream(mediaStream)
+    return
+  }
+
+  warmCameraStream = mediaStream
+  clearWarmCameraReleaseTimer()
+  warmCameraReleaseTimer = window.setTimeout(() => {
+    releaseWarmCameraStream()
+  }, FAST_REOPEN_WINDOW_MS)
+}
+
+const consumeWarmCameraStream = () => {
+  if (!isReusableCameraStream(warmCameraStream)) {
+    releaseWarmCameraStream()
+    return null
+  }
+
+  const reusableStream = warmCameraStream
+  warmCameraStream = null
+  clearWarmCameraReleaseTimer()
+  return reusableStream
+}
+
+const getAdaptiveFrameMetrics = (video) => {
+  const now = performance.now()
+
+  if (!cachedFrameMetrics || now - lastFrameMetricsAt > 220) {
+    cachedFrameMetrics = computeFrameMetrics(video, scanCanvasCache)
+    lastFrameMetricsAt = now
+  }
+
+  return cachedFrameMetrics
+}
 
 // 生命周期
 onMounted(async () => {
@@ -1155,18 +3205,21 @@ onMounted(async () => {
     return
   }
 
-  await checkPermissions()
-  await listDevices()
+  initializeScannerWorker()
+  void checkPermissions()
   if (isAdmin) {
     void ensureBinsLoaded()
   }
   if (currentMode.value === 'camera') {
-    await startScanning()
+    void primeWarmCamera()
+    await autoStartCamera()
   }
+  void listDevices()
 })
 
 onBeforeUnmount(() => {
-  stopScanning()
+  stopScanning({ forceRelease: true })
+  disableScannerWorker()
 
   if (typeof removeAudioPrimeListeners === 'function') {
     removeAudioPrimeListeners()
@@ -1178,6 +3231,9 @@ onBeforeUnmount(() => {
   if (operationNoticeTimer) {
     clearTimeout(operationNoticeTimer)
   }
+  hideScanCapturePulse()
+  clearRoiAssistStatusTimer()
+  releaseWarmCameraStream()
 })
 
 // 检查权限
@@ -1226,7 +3282,14 @@ const listDevices = async () => {
         device.label.includes('後')
       )
       
-      selectedDevice.value = rearCamera ? rearCamera.deviceId : devices.value[0].deviceId
+      const storedDeviceId = localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || ''
+      const hasStoredDevice = storedDeviceId && devices.value.some((device) => device.deviceId === storedDeviceId)
+      selectedDevice.value = hasStoredDevice
+        ? storedDeviceId
+        : (rearCamera ? rearCamera.deviceId : devices.value[0].deviceId)
+      if (selectedDevice.value) {
+        localStorage.setItem(PREFERRED_CAMERA_DEVICE_KEY, selectedDevice.value)
+      }
       
       console.log('📷 可用摄像头:', devices.value.map(d => ({
         deviceId: d.deviceId,
@@ -1239,6 +3302,295 @@ const listDevices = async () => {
   }
 }
 
+const waitForVideoMetadata = (videoEl, timeoutMs = 900) => new Promise((resolve) => {
+  if (!videoEl) {
+    resolve()
+    return
+  }
+
+  if (videoEl.readyState >= 1) {
+    resolve()
+    return
+  }
+
+  const handleReady = () => {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    videoEl.removeEventListener('loadedmetadata', handleReady)
+    videoEl.removeEventListener('loadeddata', handleReady)
+    resolve()
+  }
+
+  const timer = window.setTimeout(() => {
+    videoEl.removeEventListener('loadedmetadata', handleReady)
+    videoEl.removeEventListener('loadeddata', handleReady)
+    resolve()
+  }, timeoutMs)
+
+  videoEl.addEventListener('loadedmetadata', handleReady, { once: true })
+  videoEl.addEventListener('loadeddata', handleReady, { once: true })
+})
+
+const waitForVideoPlayableState = (videoEl, timeoutMs = 900) => new Promise((resolve) => {
+  if (!videoEl) {
+    resolve(false)
+    return
+  }
+
+  if (videoEl.readyState >= 2) {
+    resolve(true)
+    return
+  }
+
+  const handleReady = () => {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    videoEl.removeEventListener('canplay', handleReady)
+    videoEl.removeEventListener('playing', handleReady)
+    videoEl.removeEventListener('loadeddata', handleReady)
+    resolve(true)
+  }
+
+  const timer = window.setTimeout(() => {
+    videoEl.removeEventListener('canplay', handleReady)
+    videoEl.removeEventListener('playing', handleReady)
+    videoEl.removeEventListener('loadeddata', handleReady)
+    resolve(videoEl.readyState >= 2)
+  }, timeoutMs)
+
+  videoEl.addEventListener('canplay', handleReady, { once: true })
+  videoEl.addEventListener('playing', handleReady, { once: true })
+  videoEl.addEventListener('loadeddata', handleReady, { once: true })
+})
+
+const safeStopStream = (mediaStream) => {
+  if (!mediaStream) return
+  mediaStream.getTracks().forEach((track) => track.stop())
+}
+
+const getPrimaryVideoTrack = (mediaStream) => mediaStream?.getVideoTracks?.()?.[0] || null
+
+const getStreamSnapshot = (mediaStream) => {
+  const track = getPrimaryVideoTrack(mediaStream)
+  const settings = track?.getSettings?.() || {}
+
+  return {
+    track,
+    deviceId: settings.deviceId || '',
+    facingMode: settings.facingMode || ''
+  }
+}
+
+const shouldUpgradeFromPrimer = (mediaStream) => {
+  const { deviceId, facingMode } = getStreamSnapshot(mediaStream)
+
+  if (selectedDevice.value) {
+    return !deviceId || deviceId !== selectedDevice.value
+  }
+
+  if (facingMode) {
+    return facingMode !== 'environment'
+  }
+
+  return true
+}
+
+const attachStreamToVideo = (mediaStream, { awaitReady = false } = {}) => {
+  if (!videoRef.value) return
+
+  clearVideoReadyTimer()
+  clearDeferredTrackConstraintsTimer()
+  isVideoFrameReady.value = false
+  stream = mediaStream
+  videoRef.value.srcObject = mediaStream
+
+  const track = getPrimaryVideoTrack(mediaStream)
+  if (track) {
+    const settings = track.getSettings?.() || {}
+    if (settings.deviceId) {
+      selectedDevice.value = settings.deviceId
+      localStorage.setItem(PREFERRED_CAMERA_DEVICE_KEY, settings.deviceId)
+    }
+    deferredTrackConstraintsTimer = window.setTimeout(() => {
+      deferredTrackConstraintsTimer = null
+      if (stream !== mediaStream || !isScanning.value) return
+      void applyPreferredTrackConstraints(track)
+    }, 260)
+  }
+
+  if (awaitReady) {
+    return ensureVideoPlayback(videoRef.value)
+  }
+
+  void ensureVideoPlayback(videoRef.value)
+}
+
+const requestBasicCameraPermission = async () => {
+  const preferredDeviceId = selectedDevice.value || localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || ''
+
+  if (preferredDeviceId) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: preferredDeviceId },
+          width: { ideal: 960 },
+          height: { ideal: 540 }
+        },
+        audio: false
+      })
+    } catch (error) {
+      console.warn('Preferred camera could not be reopened directly, falling back to environment camera.', error)
+    }
+  }
+
+  return navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 960 },
+      height: { ideal: 540 }
+    },
+    audio: false
+  })
+}
+
+const primeWarmCamera = async () => {
+  if (stream || warmCameraPrimePromise || warmCameraStream || currentMode.value !== 'camera') {
+    return warmCameraPrimePromise
+  }
+
+  warmCameraPrimePromise = (async () => {
+    try {
+      const primerStream = await requestBasicCameraPermission()
+      if (!isReusableCameraStream(primerStream)) {
+        safeStopStream(primerStream)
+        return null
+      }
+
+      preserveCameraForFastReopen(primerStream)
+      return primerStream
+    } catch (error) {
+      console.warn('Warm camera prime failed:', error)
+      return null
+    } finally {
+      warmCameraPrimePromise = null
+    }
+  })()
+
+  return warmCameraPrimePromise
+}
+
+const requestCameraStreamWithTimeout = async (timeoutMs = 2600) => Promise.race([
+  requestCameraStream(),
+  new Promise((_, reject) => {
+    window.setTimeout(() => {
+      reject(new Error('Camera request timed out'))
+    }, timeoutMs)
+  })
+])
+
+const getCameraConstraintCandidates = () => {
+  const preferred = buildPreferredVideoConstraints(selectedDevice.value, 'environment')
+
+  return [
+    preferred,
+    buildPreferredVideoConstraints('', 'environment'),
+    {
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    },
+    {
+      video: true
+    }
+  ]
+}
+
+const requestCameraStream = async () => {
+  const attempts = getCameraConstraintCandidates()
+  let lastError = null
+
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (error) {
+      lastError = error
+      console.warn('Camera constraint attempt failed:', constraints, error)
+    }
+  }
+
+  throw lastError || new Error('Unable to open camera stream')
+}
+
+const ensureVideoPlayback = async (videoEl) => {
+  if (!videoEl) return
+
+  videoEl.setAttribute('muted', '')
+  videoEl.muted = true
+  videoEl.playsInline = true
+  const metadataPromise = waitForVideoMetadata(videoEl, 1200)
+
+  const tryPlay = async () => {
+    const playPromise = videoEl.play()
+    if (!playPromise || typeof playPromise.then !== 'function') {
+      return true
+    }
+
+    return Promise.race([
+      playPromise.then(() => true),
+      new Promise((resolve) => {
+        window.setTimeout(() => resolve(false), 700)
+      })
+    ])
+  }
+
+  try {
+    const played = await tryPlay()
+    if (!played) {
+      console.warn('Video playback is taking longer than expected; continuing while waiting for the first frame.')
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      await tryPlay()
+    } else {
+      console.warn('Video play() did not complete cleanly; continuing with the attached camera stream.', error)
+    }
+  }
+
+  await metadataPromise
+  await waitForVideoPlayableState(videoEl, 800)
+}
+
+const handleVideoFrameReady = () => {
+  if (!isScanning.value || !videoRef.value) return
+  if (!videoRef.value.videoWidth || !videoRef.value.videoHeight) return
+  if (isVideoFrameReady.value || videoReadyTimer) return
+
+  videoReadyTimer = window.setTimeout(() => {
+    videoReadyTimer = null
+    if (!isScanning.value || !videoRef.value) return
+    if (!videoRef.value.videoWidth || !videoRef.value.videoHeight) return
+    captureBenchmarkFirstFrame()
+    isVideoFrameReady.value = true
+  }, 36)
+}
+
+const autoStartCamera = async () => {
+  if (currentMode.value !== 'camera' || isScanning.value) return
+
+  await nextTick()
+
+  if (!videoRef.value || currentMode.value !== 'camera' || isScanning.value) return
+
+  statusMessage.value = 'Opening camera...'
+  statusType.value = 'info'
+  void startScanning()
+}
+
 // 切换模式
 const switchMode = async (mode) => {
   if (currentMode.value === 'camera') {
@@ -1247,8 +3599,8 @@ const switchMode = async (mode) => {
   currentMode.value = mode
   
   if (mode === 'camera') {
-    await nextTick()
-    await startScanning()
+    void primeWarmCamera()
+    await autoStartCamera()
   }
 }
 
@@ -1259,40 +3611,129 @@ const startScanning = async () => {
   try {
     void primeAudioFeedback()
     isScanning.value = true
+    isVideoFrameReady.value = false
+    hideScanCapturePulse()
+    decodeMissStreak = 0
+    cachedFrameMetrics = null
+    lastFrameMetricsAt = 0
+    lastGuidanceUpdateAt = 0
+    lastStabilitySampleAt = 0
+    previousStabilityFrame = null
+    scanGuidanceMessage.value = 'Please place the barcode inside the frame'
+    resetScannerWorkerState()
+    resetRoiAssistAutoTimer()
+    beginBenchmarkSession('camera')
     statusMessage.value = 'Starting camera...'
     statusType.value = 'info'
-    
-    // 获取视频流
-    const constraints = buildPreferredVideoConstraints(selectedDevice.value, 'environment')
-    
-    stream = await navigator.mediaDevices.getUserMedia(constraints)
-    videoRef.value.srcObject = stream
-    await videoRef.value.play()
+
+    cameraStartupHintTimer = window.setTimeout(() => {
+      if (isScanning.value && !stream) {
+        statusMessage.value = 'Waiting for camera permission. In Safari, tap the address bar menu and choose “开始使用相机”.'
+        statusType.value = 'info'
+      }
+    }, 1800)
+
+    const primerStream =
+      consumeWarmCameraStream() ||
+      (await warmCameraPrimePromise) ||
+      (await requestBasicCameraPermission())
+    attachStreamToVideo(primerStream)
+
+    if (cameraStartupHintTimer) {
+      clearTimeout(cameraStartupHintTimer)
+      cameraStartupHintTimer = null
+    }
 
     // 初始化 ZXing
     getCodeReader()
     lastDecodeAttemptAt = 0
     stopScanLoop()
     runEnhancedScanLoop()
-    
-    statusMessage.value = 'Scan started. Please place the barcode inside the frame'
-    statusType.value = 'success'
 
-    window.requestAnimationFrame(() => {
+    statusMessage.value = 'Camera opened. Live preview is starting...'
+    statusType.value = 'info'
+
+    if (shouldUpgradeFromPrimer(primerStream)) {
+      void (async () => {
+        try {
+          const upgradedStream = await requestCameraStreamWithTimeout(1600)
+          if (!isScanning.value) {
+            safeStopStream(upgradedStream)
+            return
+          }
+
+          if (upgradedStream !== stream) {
+            const previousStream = stream
+            attachStreamToVideo(upgradedStream)
+            if (previousStream && previousStream !== upgradedStream) {
+              safeStopStream(previousStream)
+            }
+          }
+
+          statusMessage.value = 'Rear camera optimized. Please place the barcode inside the frame'
+          statusType.value = 'success'
+          void checkFlashSupport()
+        } catch (upgradeError) {
+          console.warn('Continuing with the fast compatibility camera stream:', upgradeError)
+          statusMessage.value = 'Scan started. Please place the barcode inside the frame'
+          statusType.value = 'success'
+          void checkFlashSupport()
+        }
+      })()
+    } else {
+      statusMessage.value = 'Scan started. Please place the barcode inside the frame'
+      statusType.value = 'success'
       void checkFlashSupport()
-    })
+    }
+    
+    if (videoRef.value.readyState < 2) {
+      statusMessage.value = 'Camera opened. Waiting for the first live frame...'
+      statusType.value = 'info'
+    }
+
+    void listDevices()
   } catch (error) {
     console.error('スキャン開始に失敗しました:', error)
-    statusMessage.value = 'Failed to start scan: ' + error.message
+    if (cameraStartupHintTimer) {
+      clearTimeout(cameraStartupHintTimer)
+      cameraStartupHintTimer = null
+    }
+    safeStopStream(stream)
+    stream = null
+    if (videoRef.value) {
+      videoRef.value.srcObject = null
+    }
+    const fallbackMessage = error?.name === 'AbortError'
+      ? 'Camera startup was interrupted. Please tap Retry Camera once more.'
+      : (error?.message || 'Unknown camera error')
+    statusMessage.value = 'Failed to start scan: ' + fallbackMessage
     statusType.value = 'error'
     isScanning.value = false
+    finalizeBenchmarkSession({ status: 'startup_failed', labelType: 'CAMERA_INIT' })
   }
 }
 
 // 停止扫描
-const stopScanning = async () => {
+const stopScanning = async ({ forceRelease = false } = {}) => {
   isScanning.value = false
+  isVideoFrameReady.value = false
+  hideScanCapturePulse()
+  decodeMissStreak = 0
+  cachedFrameMetrics = null
+  lastFrameMetricsAt = 0
+  lastGuidanceUpdateAt = 0
+  lastStabilitySampleAt = 0
+  previousStabilityFrame = null
+  scanGuidanceMessage.value = 'Please place the barcode inside the frame'
+  resetScannerWorkerState()
+  resetRoiAssistAutoTimer()
+  clearVideoReadyTimer()
+  clearDeferredTrackConstraintsTimer()
   stopScanLoop()
+  if (cameraStartupHintTimer) {
+    clearTimeout(cameraStartupHintTimer)
+    cameraStartupHintTimer = null
+  }
   
   if (codeReader) {
     try {
@@ -1304,17 +3745,28 @@ const stopScanning = async () => {
   }
   
   if (stream) {
-    stream.getTracks().forEach(track => track.stop())
+    if (forceRelease) {
+      safeStopStream(stream)
+    } else {
+      preserveCameraForFastReopen(stream)
+    }
     stream = null
   }
   
   if (videoRef.value) {
     videoRef.value.srcObject = null
   }
+
+  if (activeBenchmarkSession.value?.status === 'pending') {
+    finalizeBenchmarkSession({ status: 'stopped', labelType: 'UNRESOLVED' })
+  }
 }
 
 // 切换摄像头
 const switchDevice = async () => {
+  if (selectedDevice.value) {
+    localStorage.setItem(PREFERRED_CAMERA_DEVICE_KEY, selectedDevice.value)
+  }
   if (isScanning.value) {
     await stopScanning()
     // 等待一下确保资源释放
@@ -1486,6 +3938,7 @@ const handleFileUpload = async (event) => {
   if (!file) return
   
   try {
+    beginBenchmarkSession('file')
     void primeAudioFeedback()
     statusMessage.value = 'Analyzing image...'
     statusType.value = 'info'
@@ -1499,6 +3952,7 @@ const handleFileUpload = async (event) => {
     }
   } catch (error) {
     console.error('画像解析に失敗しました:', error)
+    finalizeBenchmarkSession({ status: 'decode_failed', labelType: 'FILE_IMAGE' })
     statusMessage.value = 'Cannot recognize barcode in image'
     statusType.value = 'error'
   }
@@ -1507,6 +3961,7 @@ const handleFileUpload = async (event) => {
 // 处理手动输入
 const handleManualSubmit = () => {
   if (manualCode.value.trim()) {
+    beginBenchmarkSession('manual')
     void primeAudioFeedback()
     void handleScanResult(manualCode.value.trim())
     manualCode.value = ''
@@ -1515,7 +3970,7 @@ const handleManualSubmit = () => {
 
 // 处理扫描结果
 const handleScanResult = async (rawData, options = {}) => {
-  const { bypassCooldown = false, silent = false } = options
+  const { bypassCooldown = false, silent = false, captureLocation = null } = options
   const normalizedRaw = String(rawData || '').trim()
 
   if (!normalizedRaw) return
@@ -1525,6 +3980,9 @@ const handleScanResult = async (rawData, options = {}) => {
   isHandlingScan.value = true
   lastProcessedScan.value = normalizedRaw
   lastProcessedAt.value = Date.now()
+  if (!silent) {
+    showScanCapturePulse('Code captured', captureLocation)
+  }
 
   try {
     statusMessage.value = 'Processing scan...'
@@ -1542,9 +4000,38 @@ const handleScanResult = async (rawData, options = {}) => {
       body: JSON.stringify({ raw: normalizedRaw, device: 'web-scanner' })
     })
 
-    const result = await response.json()
+    const responseText = await response.text()
+    let result = null
+
+    try {
+      result = responseText ? JSON.parse(responseText) : null
+    } catch (parseError) {
+      throw new Error(`Scanner API returned a non-JSON response (${response.status}).`)
+    }
+
+    if (!response.ok) {
+      const backendMessage = result?.message || result?.error || `HTTP ${response.status}`
+      if (isAuthFailure(response.status, backendMessage)) {
+        handleAuthFailure(backendMessage)
+        finalizeBenchmarkSession({
+          status: 'auth_failed',
+          labelType: 'UNRESOLVED',
+          rawData: normalizedRaw
+        })
+        return
+      }
+      throw new Error(backendMessage)
+    }
+
+    if (!result || typeof result !== 'object') {
+      throw new Error('Scanner API returned an empty response.')
+    }
     
     if (result.success) {
+      showMultiCodePicker.value = false
+      roiAssistCandidates.value = []
+      setRoiAssistStatus('', { autoClearMs: 0 })
+      ensureBenchmarkSession(options.sourceMode || currentMode.value)
       scanResult.value = {
         raw: normalizedRaw,
         parsed: result.data.data, // Contains specific data points returned from scanController
@@ -1584,15 +4071,35 @@ const handleScanResult = async (rawData, options = {}) => {
         triggerScanFeedback()
       }
 
+      finalizeBenchmarkSession({
+        status: 'success',
+        labelType: resolveScanLabelType(result.data.data, result.data.action),
+        rawData: normalizedRaw
+      })
+
     } else {
       statusMessage.value = result.message || 'Scan failed'
       statusType.value = 'error'
+      finalizeBenchmarkSession({
+        status: 'backend_failed',
+        labelType: 'UNRESOLVED',
+        rawData: normalizedRaw
+      })
     }
     
   } catch (error) {
-    console.error('スキャン結果の処理に失敗しました:', error)
-    statusMessage.value = 'Failed to process scan result'
+    console.error('スキャン結果の処理に失敗しました:', {
+      raw: normalizedRaw,
+      message: error?.message,
+      stack: error?.stack
+    })
+    statusMessage.value = `Scan failed: ${error?.message || 'Unknown processing error'}`
     statusType.value = 'error'
+    finalizeBenchmarkSession({
+      status: 'request_failed',
+      labelType: 'UNRESOLVED',
+      rawData: normalizedRaw
+    })
   } finally {
     isHandlingScan.value = false
   }
@@ -1857,6 +4364,7 @@ const handleOutbound = () => {
   }
 
   outboundStrategy.value = strategy || 'DIRECT'
+  outboundSelectionMode.value = strategy === 'FIFO' && candidates.length > 1 ? 'AUTO' : 'MANUAL'
   outboundCandidates.value = candidates
   selectedOutboundLotKey.value = candidates[0]?.key || ''
   outboundForm.value = {
@@ -1869,6 +4377,7 @@ const handleOutbound = () => {
     uom: 'pcs'
   }
   syncOutboundCandidate()
+  pauseOutboundLiveDecoding()
   showOutboundModal.value = true
 }
 
@@ -1881,7 +4390,7 @@ const submitOutbound = async () => {
     return
   }
 
-  if (!isOutboundFifoMode.value && !outboundForm.value.lot_number) {
+  if (!isOutboundAutoMode.value && !outboundForm.value.lot_number) {
     statusMessage.value = 'Please choose a specific lot and source bin first.'
     statusType.value = 'error'
     return
@@ -1906,7 +4415,7 @@ const submitOutbound = async () => {
         'Authorization': `Bearer ${localStorage.getItem('token')}`
       },
       body: JSON.stringify(
-        isOutboundFifoMode.value
+        isOutboundAutoMode.value
           ? {
               sku: outboundForm.value.sku,
               qty,
@@ -1936,7 +4445,7 @@ const submitOutbound = async () => {
     statusType.value = 'success'
     showActionFeedbackModal(
       'Outbound Complete',
-      isOutboundFifoMode.value
+      isOutboundAutoMode.value
         ? `${outboundForm.value.item_name} -${qty} was deducted by FIFO. ${fifoSummary}`
         : `${outboundForm.value.item_name} -${qty} was deducted from ${directSourceBinCode}.`
     )
@@ -1960,12 +4469,35 @@ const clearResult = () => {
   outboundCandidates.value = []
   selectedOutboundLotKey.value = ''
   outboundStrategy.value = 'DIRECT'
+  outboundSelectionMode.value = 'AUTO'
+  showMultiCodePicker.value = false
+  roiAssistCandidates.value = []
+  hideScanCapturePulse()
+  setRoiAssistStatus('', { autoClearMs: 0 })
   actionFeedbackModal.value.visible = false
   if (operationNoticeTimer) {
     clearTimeout(operationNoticeTimer)
   }
   operationNotice.value.visible = false
   statusMessage.value = ''
+}
+
+const handleScanNext = async () => {
+  clearResult()
+
+  if (currentMode.value !== 'camera') return
+
+  statusMessage.value = 'Camera ready. Scan the next label.'
+  statusType.value = 'success'
+
+  await nextTick()
+
+  if (isScanning.value) {
+    resumeOutboundLiveDecoding()
+    return
+  }
+
+  await startScanning()
 }
 
 // 播放扫描音效
@@ -2054,17 +4586,60 @@ const playActionSuccessSound = () => {
   position: relative;
   overflow: hidden;
   background: #000000;
+  height: 400px;
 }
 
 .camera-video {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 400px;
+  height: 100%;
+  display: block;
   object-fit: cover;
+  object-position: center center;
   background: #000000;
+  opacity: 1;
+  transition: opacity 0.18s ease;
 }
 
 .camera-video.scanning {
   border: 3px solid #10b981;
+}
+
+.camera-video.pending {
+  opacity: 0;
+}
+
+.camera-video.ready {
+  opacity: 1;
+}
+
+.camera-stage-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, rgba(17, 24, 39, 0.8), rgba(0, 0, 0, 0.98));
+  z-index: 1;
+}
+
+.camera-stage-placeholder-copy {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.camera-stage-placeholder-copy strong {
+  display: block;
+  font-size: 1.05rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.camera-stage-placeholder-copy p {
+  margin: 8px 0 0;
+  font-size: 0.92rem;
+  color: rgba(255, 255, 255, 0.68);
 }
 
 .scan-overlay {
@@ -2078,6 +4653,7 @@ const playActionSuccessSound = () => {
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  z-index: 2;
 }
 
 .scan-frame {
@@ -2085,6 +4661,145 @@ const playActionSuccessSound = () => {
   width: 250px;
   height: 250px;
   border: 2px solid rgba(255, 255, 255, 0.8);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.scan-frame-locked {
+  border-color: rgba(187, 247, 208, 0.98);
+  background:
+    radial-gradient(circle at center, rgba(16, 185, 129, 0.16) 0%, rgba(16, 185, 129, 0.07) 45%, rgba(16, 185, 129, 0) 74%);
+  box-shadow:
+    0 0 0 999px rgba(16, 185, 129, 0.035),
+    0 0 26px rgba(16, 185, 129, 0.34),
+    inset 0 0 20px rgba(16, 185, 129, 0.12);
+  animation: scanFrameCaptured 0.92s cubic-bezier(0.2, 0.9, 0.22, 1) both;
+}
+
+.scan-frame-locked .corner {
+  border-color: #bbf7d0;
+  filter: drop-shadow(0 0 10px rgba(134, 239, 172, 0.72));
+}
+
+.scan-code-lock {
+  position: absolute;
+  pointer-events: none;
+  z-index: 4;
+  border: 1px solid rgba(187, 247, 208, 0.88);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.14), rgba(16, 185, 129, 0.02) 64%),
+    rgba(2, 44, 34, 0.14);
+  box-shadow:
+    0 0 0 999px rgba(16, 185, 129, 0.025),
+    0 18px 42px rgba(5, 150, 105, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: scanCodeLockIn 0.92s cubic-bezier(0.2, 0.9, 0.22, 1) both;
+}
+
+.scan-code-lock-corner {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 4px solid #34d399;
+  filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.8));
+}
+
+.scan-code-lock-top-left {
+  top: -4px;
+  left: -4px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.scan-code-lock-top-right {
+  top: -4px;
+  right: -4px;
+  border-left: none;
+  border-bottom: none;
+}
+
+.scan-code-lock-bottom-left {
+  bottom: -4px;
+  left: -4px;
+  border-right: none;
+  border-top: none;
+}
+
+.scan-code-lock-bottom-right {
+  right: -4px;
+  bottom: -4px;
+  border-left: none;
+  border-top: none;
+}
+
+.scan-code-lock-dot {
+  position: absolute;
+  right: -9px;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #34d399;
+  border: 3px solid rgba(236, 253, 245, 0.96);
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.72);
+  animation: scanCaptureDot 0.92s ease-out infinite;
+}
+
+.scan-code-lock-label {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(236, 253, 245, 0.92);
+  color: #065f46;
+  font-size: 0.78rem;
+  font-weight: 800;
+  box-shadow: 0 8px 20px rgba(4, 120, 87, 0.2);
+}
+
+@keyframes scanCaptureDot {
+  0% {
+    box-shadow: 0 0 0 0 rgba(187, 247, 208, 0.72);
+  }
+  72% {
+    box-shadow: 0 0 0 13px rgba(187, 247, 208, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(187, 247, 208, 0);
+  }
+}
+
+@keyframes scanCodeLockIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  24% {
+    opacity: 1;
+    transform: scale(1.035);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes scanFrameCaptured {
+  0% {
+    opacity: 0.82;
+    transform: scale(0.985);
+  }
+  22% {
+    opacity: 1;
+    transform: scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .corner {
@@ -2123,10 +4838,39 @@ const playActionSuccessSound = () => {
 }
 
 .scan-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 40px;
   margin-top: 20px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
   color: white;
   font-weight: 600;
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+  transition: all 0.18s ease;
+}
+
+.scan-hint-captured {
+  border-color: rgba(187, 247, 208, 0.7);
+  background: rgba(6, 95, 70, 0.72);
+  box-shadow:
+    0 16px 36px rgba(4, 120, 87, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  text-shadow: none;
+}
+
+.scan-hint-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #bbf7d0;
+  box-shadow: 0 0 0 0 rgba(187, 247, 208, 0.72);
+  animation: scanCaptureDot 0.92s ease-out infinite;
 }
 
 .camera-controls {
@@ -2147,6 +4891,7 @@ const playActionSuccessSound = () => {
   cursor: pointer;
   font-weight: 600;
   transition: all 0.2s;
+  touch-action: manipulation;
 }
 
 .control-btn:hover {
@@ -2311,12 +5056,33 @@ const playActionSuccessSound = () => {
 }
 
 .workflow-guide-compact-item {
-  border-radius: 12px;
-  border: 1px solid #dbe3f0;
-  background: #f8fafc;
-  padding: 11px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.6);
+  padding: 12px 14px;
   color: #334155;
-  line-height: 1.5;
+  line-height: 1.55;
+}
+
+.workflow-guide-glass-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.workflow-guide-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+  font-size: 0.78rem;
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 .result-item {
@@ -2517,33 +5283,311 @@ const playActionSuccessSound = () => {
 
 .business-actions {
   display: flex;
-  gap: 15px;
+  gap: 12px;
   flex-wrap: wrap;
+}
+
+.business-actions-primary {
+  margin-top: 14px;
+}
+
+.business-actions-secondary {
+  margin-top: 10px;
+}
+
+.result-meta-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.result-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #334155;
+  background: rgba(226, 232, 240, 0.9);
+}
+
+.result-pill-live {
+  background: rgba(219, 234, 254, 0.92);
+  color: #1d4ed8;
+}
+
+.roi-assist-status {
+  margin: 12px auto 0;
+  width: min(92%, 520px);
+  padding: 12px 16px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(241, 245, 249, 0.72) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #334155;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+}
+
+.roi-assist-btn {
+  border-color: rgba(59, 130, 246, 0.24);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(219, 234, 254, 0.88));
+  color: #1d4ed8;
+}
+
+.roi-assist-btn:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.multi-code-card {
+  margin: 0 0 20px;
+  padding: 20px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.9), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(248, 250, 252, 0.76));
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow:
+    0 24px 60px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(26px) saturate(135%);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
+}
+
+.multi-code-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.multi-code-eyebrow {
+  display: inline-flex;
+  margin-bottom: 7px;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.multi-code-header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.28rem;
+  letter-spacing: -0.03em;
+}
+
+.multi-code-header p {
+  margin: 6px 0 0;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.multi-code-close {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.68);
+  color: #64748b;
+  font-size: 1.4rem;
+  cursor: pointer;
+}
+
+.multi-code-list {
+  display: grid;
+  gap: 10px;
+}
+
+.multi-code-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.multi-code-option.recommended {
+  border-color: rgba(16, 185, 129, 0.38);
+  background:
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.12), transparent 42%),
+    rgba(255, 255, 255, 0.82);
+  box-shadow:
+    0 12px 28px rgba(16, 185, 129, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.multi-code-option:hover {
+  border-color: rgba(59, 130, 246, 0.36);
+  background: rgba(239, 246, 255, 0.86);
+}
+
+.multi-code-type {
+  grid-row: 1 / span 5;
+  align-self: start;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #ffffff;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.multi-code-recommendation {
+  display: inline-flex;
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.multi-code-main {
+  font-size: 1.02rem;
+  font-weight: 800;
+  word-break: break-all;
+}
+
+.multi-code-subtitle {
+  color: #334155;
+  font-size: 0.9rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.multi-code-raw {
+  color: #64748b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.multi-code-meta {
+  color: #64748b;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.multi-code-selection-reason {
+  color: #2563eb;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.multi-code-primary {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.11);
+  color: #047857;
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1.35;
 }
 
 .action-btn {
   padding: 12px 24px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid rgba(203, 213, 225, 0.95);
   border-radius: 12px;
   cursor: pointer;
-  font-weight: 500;
-  transition: all 0.2s;
-  background: var(--glass-bg);
-  color: var(--text-primary);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  font-weight: 600;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  background: #ffffff;
+  color: #0f172a;
   flex: 1;
   min-width: 140px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  touch-action: manipulation;
 }
 
 .action-btn:hover {
-  transform: translateY(-2px);
-  background: var(--glass-border);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.action-btn-primary {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+
+.action-btn-primary:hover,
+.action-btn-primary:active {
+  background: #111827;
+  border-color: #111827;
+}
+
+.action-btn-dark {
+  background: #1e293b;
+  color: #ffffff;
+  border-color: #1e293b;
+}
+
+.action-btn-dark:hover,
+.action-btn-dark:active {
+  background: #0f172a;
+  border-color: #0f172a;
+}
+
+.action-btn-create {
+  background: #10b981;
+  color: #ffffff;
+  border-color: #10b981;
+}
+
+.action-btn-create:hover,
+.action-btn-create:active {
+  background: #059669;
+  border-color: #059669;
+}
+
+.action-btn-secondary {
+  background: #f8fafc;
+  color: #334155;
+  border-color: #cbd5e1;
+}
+
+.action-btn-secondary.resume {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.action-btn-secondary.resume:hover,
+.action-btn-secondary.resume:active {
+  background: #dbeafe;
+  border-color: #93c5fd;
 }
 
 .operation-toast {
@@ -2554,44 +5598,48 @@ const playActionSuccessSound = () => {
   align-items: center;
   gap: 14px;
   margin-bottom: 16px;
-  padding: 16px 18px;
-  border-radius: 16px;
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid transparent;
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
+  padding: 14px 16px;
+  border-radius: 20px;
+  backdrop-filter: blur(24px) saturate(135%);
+  -webkit-backdrop-filter: blur(24px) saturate(135%);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.1);
 }
 
 .operation-toast.success {
-  background: rgba(236, 253, 245, 0.92);
-  border-color: rgba(16, 185, 129, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74) 0%, rgba(248, 250, 252, 0.9) 100%),
+    linear-gradient(90deg, rgba(52, 211, 153, 0.12) 0%, rgba(125, 211, 252, 0.1) 100%);
+  border-color: rgba(148, 163, 184, 0.18);
 }
 
 .operation-toast.error {
-  background: rgba(254, 242, 242, 0.94);
-  border-color: rgba(239, 68, 68, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.8) 0%, rgba(254, 242, 242, 0.92) 100%);
+  border-color: rgba(248, 113, 113, 0.22);
 }
 
 .operation-toast-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: 999px;
-  font-size: 1rem;
+  font-size: 0.98rem;
   font-weight: 700;
   flex-shrink: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 
 .operation-toast.success .operation-toast-icon {
-  background: rgba(16, 185, 129, 0.14);
-  color: #059669;
+  background: rgba(15, 23, 42, 0.07);
+  color: #0f172a;
 }
 
 .operation-toast.error .operation-toast-icon {
-  background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
 }
 
 .operation-toast-copy strong {
@@ -2691,7 +5739,7 @@ const playActionSuccessSound = () => {
     padding: 15px;
   }
   
-  .camera-video {
+  .camera-stage {
     height: 300px;
   }
 }
@@ -2705,7 +5753,7 @@ const playActionSuccessSound = () => {
     margin-bottom: 18px;
   }
   
-  .camera-video {
+  .camera-stage {
     height: 300px;
   }
   
@@ -2731,8 +5779,29 @@ const playActionSuccessSound = () => {
     flex-direction: column;
   }
 
+  .result-meta-pills {
+    justify-content: center;
+  }
+
   .camera-controls {
     flex-wrap: wrap;
+  }
+
+  .multi-code-card {
+    padding: 18px;
+  }
+
+  .multi-code-header {
+    align-items: flex-start;
+  }
+
+  .multi-code-option {
+    grid-template-columns: 1fr;
+  }
+
+  .multi-code-type {
+    grid-row: auto;
+    justify-self: flex-start;
   }
 
   .inquiry-grid {
@@ -2765,12 +5834,15 @@ const playActionSuccessSound = () => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.12), transparent 38%),
+    rgba(15, 23, 42, 0.38);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
   overflow-y: auto;
   padding: 24px 16px;
   box-sizing: border-box;
@@ -2781,41 +5853,74 @@ const playActionSuccessSound = () => {
 }
 
 .modal-content {
-  background: white;
-  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(248, 250, 252, 0.9) 100%);
+  border-radius: 28px;
   width: 90%;
   max-width: 500px;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow:
+    0 28px 70px rgba(15, 23, 42, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
   max-height: min(88vh, 760px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.glass-panel {
+  backdrop-filter: blur(26px) saturate(135%);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
 }
 
 .action-feedback-modal {
   align-items: center;
   text-align: center;
-  gap: 14px;
-  padding: 28px 24px 24px;
-  max-width: 360px;
+  gap: 16px;
+  padding: 32px 24px 24px;
+  max-width: 380px;
 }
 
-.action-feedback-icon {
+.action-feedback-orb {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 64px;
-  height: 64px;
+  width: 72px;
+  height: 72px;
   border-radius: 999px;
-  background: rgba(16, 185, 129, 0.12);
-  color: #059669;
-  font-size: 1.75rem;
-  font-weight: 800;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(226, 232, 240, 0.94) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #0f172a;
+  font-size: 1.65rem;
+  font-weight: 700;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 18px 36px rgba(15, 23, 42, 0.08);
+}
+
+.action-feedback-copy-block {
+  display: grid;
+  gap: 8px;
+}
+
+.action-feedback-eyebrow,
+.modal-eyebrow,
+.outbound-summary-eyebrow {
+  display: inline-flex;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #64748b;
 }
 
 .action-feedback-modal h3 {
   margin: 0;
-  font-size: 1.35rem;
+  font-size: 1.45rem;
   color: #0f172a;
+  letter-spacing: -0.02em;
 }
 
 .action-feedback-modal p {
@@ -2826,59 +5931,84 @@ const playActionSuccessSound = () => {
 
 .action-feedback-btn {
   width: 100%;
-  margin-top: 6px;
-  min-height: 48px;
+  margin-top: 2px;
+  min-height: 50px;
 }
 
 .modal-header {
-  padding: 20px 24px;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 20px 24px 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
+}
+
+.modal-header-glass {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.54) 0%, rgba(255, 255, 255, 0.18) 100%);
+}
+
+.modal-header-copy {
+  display: grid;
+  gap: 6px;
 }
 
 .modal-header h3 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1.95rem;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
   color: #111827;
 }
 
 .close-btn {
-  background: none;
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.16);
   font-size: 1.5rem;
-  color: #6b7280;
+  color: #64748b;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .form-body {
   padding: 24px;
   overflow-y: auto;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0) 100%);
 }
 
 .form-group {
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 
 .form-group label {
   display: block;
-  font-weight: 500;
-  margin-bottom: 8px;
-  color: #374151;
+  font-weight: 600;
+  margin-bottom: 9px;
+  color: #334155;
+  letter-spacing: -0.02em;
 }
 
 .input-field {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
+  padding: 13px 15px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
   font-size: 1rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: #0f172a;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .disabled-input {
-  background-color: #f3f4f6;
-  color: #6b7280;
+  background-color: rgba(248, 250, 252, 0.72);
+  color: #94a3b8;
   cursor: not-allowed;
 }
 
@@ -2895,14 +6025,49 @@ const playActionSuccessSound = () => {
 
 .outbound-plan-list {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+}
+
+.outbound-mode-toggle {
+  display: inline-flex;
+  width: 100%;
+  padding: 5px;
+  gap: 6px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(226, 232, 240, 0.8) 0%, rgba(241, 245, 249, 0.94) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
+.outbound-mode-btn {
+  flex: 1;
+  min-height: 48px;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  color: #64748b;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+}
+
+.outbound-mode-btn.active {
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    0 10px 26px rgba(15, 23, 42, 0.08);
 }
 
 .outbound-plan-card {
-  border: 1px solid #dbe3f0;
-  border-radius: 14px;
-  padding: 12px 14px;
-  background: linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  padding: 14px 15px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(248, 250, 252, 0.88) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
 .outbound-plan-step {
@@ -2938,22 +6103,118 @@ const playActionSuccessSound = () => {
 }
 
 .btn-cancel, .btn-primary {
-  padding: 10px 16px;
-  border-radius: 8px;
-  font-weight: 500;
+  padding: 13px 18px;
+  border-radius: 16px;
+  font-weight: 600;
   cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.control-btn,
+.action-btn,
+.close-btn {
+  touch-action: manipulation;
+}
+
+.camera-container-suspended:not(.camera-container-capture-visible) .camera-video,
+.camera-container-suspended .camera-stage-placeholder,
+.camera-container-suspended:not(.camera-container-capture-visible) .scan-overlay,
+.camera-container-suspended .camera-controls {
+  visibility: hidden;
+}
+
+.camera-container-suspended.camera-container-capture-visible .scan-overlay {
+  visibility: visible;
 }
 
 .btn-cancel {
-  background: white;
-  border: 1px solid #d1d5db;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   color: #374151;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
 }
 
 .btn-primary {
-  background: #10b981;
-  border: 1px solid #10b981;
+  background:
+    linear-gradient(180deg, rgba(27, 41, 69, 0.96) 0%, rgba(15, 23, 42, 0.98) 100%);
+  border: 1px solid rgba(15, 23, 42, 0.82);
   color: white;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+.btn-primary:hover,
+.btn-primary:active {
+  transform: translateY(-1px);
+}
+
+.outbound-summary-card {
+  margin-bottom: 18px;
+  padding: 16px;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74) 0%, rgba(241, 245, 249, 0.94) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 16px 30px rgba(15, 23, 42, 0.06);
+}
+
+.outbound-summary-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.outbound-summary-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.07);
+  color: #0f172a;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.outbound-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.outbound-summary-field {
+  padding: 12px 13px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.outbound-summary-field-wide {
+  grid-column: 1 / -1;
+}
+
+.outbound-summary-field span {
+  display: block;
+  font-size: 0.76rem;
+  color: #64748b;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.outbound-summary-field strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 0.98rem;
+  line-height: 1.45;
 }
 
 .btn-primary:disabled {
@@ -2961,21 +6222,234 @@ const playActionSuccessSound = () => {
   cursor: not-allowed;
 }
 
+.benchmark-panel {
+  margin: 18px 0 22px;
+  border: 1px solid #dbe3f0;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.benchmark-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  background: transparent;
+  border: none;
+  color: #0f172a;
+  font-size: 0.98rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.benchmark-body {
+  padding: 0 18px 18px;
+}
+
+.benchmark-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.benchmark-card {
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.benchmark-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.benchmark-card strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.15rem;
+  color: #0f172a;
+}
+
+.benchmark-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.benchmark-action {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.benchmark-action.danger {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.benchmark-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ranking-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 0.88), rgba(255, 255, 255, 0.92)),
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.14), transparent 34%);
+}
+
+.ranking-summary-card {
+  padding: 12px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.ranking-summary-card span {
+  display: block;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ranking-summary-card strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 1.05rem;
+}
+
+.ranking-export-status {
+  margin: 10px 0 0;
+  color: #475569;
+  font-size: 0.86rem;
+}
+
+.benchmark-recent {
+  margin-top: 16px;
+}
+
+.benchmark-recent h4 {
+  margin: 0 0 10px;
+  color: #0f172a;
+}
+
+.benchmark-list {
+  display: grid;
+  gap: 10px;
+}
+
+.benchmark-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+
+.benchmark-row p {
+  margin: 4px 0 0;
+  font-size: 0.84rem;
+  color: #64748b;
+}
+
+.benchmark-row-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  font-size: 0.84rem;
+  color: #334155;
+}
+
+.benchmark-status {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.benchmark-status.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.benchmark-status.stopped,
+.benchmark-status.backend_failed,
+.benchmark-status.request_failed,
+.benchmark-status.decode_failed,
+.benchmark-status.startup_failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.benchmark-empty {
+  margin: 0;
+  color: #64748b;
+}
+
 @media (max-width: 768px) {
+  .benchmark-grid,
+  .ranking-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .benchmark-row {
+    flex-direction: column;
+  }
+
+  .benchmark-row-meta {
+    align-items: flex-start;
+  }
+
   .modal-overlay {
     align-items: flex-start;
     padding: max(12px, env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .modal-content {
     width: 100%;
     max-width: none;
     max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px);
-    border-radius: 18px;
+    border-radius: 26px;
   }
 
   .modal-header {
-    padding: 16px 18px;
+    padding: 18px 18px 16px;
+  }
+
+  .modal-header h3 {
+    font-size: 1.72rem;
   }
 
   .form-body {
@@ -2990,14 +6464,26 @@ const playActionSuccessSound = () => {
     z-index: 2;
     margin: 20px -18px -18px;
     padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
-    background: rgba(255, 255, 255, 0.96);
-    border-top: 1px solid #e5e7eb;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(248, 250, 252, 0.96) 100%);
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
   }
 
   .btn-cancel,
   .btn-primary {
     flex: 1 1 140px;
     min-height: 44px;
+  }
+
+  .outbound-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .outbound-summary-topline {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

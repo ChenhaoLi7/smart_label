@@ -6,6 +6,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "agent:eval": "node scripts/evaluate_agent_planner.js",
+    "scanner:train-ranker": "node scripts/train_scanner_ranker.js",
     "db:dump": "mysqldump -u root -p smart_label_db > backup.sql",
     "db:load": "mysql -u root -p smart_label_db < backup.sql"
   },

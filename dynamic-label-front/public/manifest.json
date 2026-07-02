@@ -1,8 +1,9 @@
 {
-  "name": "智能仓库管理系统",
-  "short_name": "Smart Warehouse",
+  "id": "/?app=pilot-system-home-20260423",
+  "name": "Pilot System",
+  "short_name": "Pilot System",
   "description": "智能标签和仓库管理系统 - 支持扫码、库存管理、AI预测",
-  "start_url": "/",
+  "start_url": "/?app=pilot-system-home-20260423",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#000000",
@@ -10,9 +11,9 @@
   "scope": "/",
   "icons": [
     {
-      "src": "/favicon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
+      "src": "/pilot-system-home-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
     },
     {
       "src": "/icon-192.png",
@@ -35,21 +36,21 @@
       "short_name": "扫描",
       "description": "快速进入扫码功能",
       "url": "/advanced-scan",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [{ "src": "/pilot-system-home-180.png", "sizes": "180x180" }]
     },
     {
       "name": "库存管理",
       "short_name": "库存",
       "description": "查看和管理库存",
       "url": "/inventory-management",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [{ "src": "/pilot-system-home-180.png", "sizes": "180x180" }]
     },
     {
       "name": "标签设计",
       "short_name": "标签",
       "description": "设计和打印标签",
       "url": "/label-design",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [{ "src": "/pilot-system-home-180.png", "sizes": "180x180" }]
     }
   ],
   "share_target": {
@@ -69,7 +70,4 @@
     }
   }
 }
-
-
-
 

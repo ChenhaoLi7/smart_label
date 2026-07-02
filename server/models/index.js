@@ -16,6 +16,10 @@ const SalesOrder = require('./SalesOrder')
 const SalesOrderLine = require('./SalesOrderLine')
 const PrintJob = require('./PrintJob')
 const ScanLog = require('./ScanLog')
+const ScannerBenchmark = require('./ScannerBenchmark')
+const ScannerSelectionSample = require('./ScannerSelectionSample')
+const ScanSession = require('./ScanSession')
+const ScanCandidate = require('./ScanCandidate')
 const BOMHeader = require('./BOMHeader')
 const BOMLine = require('./BOMLine')
 const WorkOrder = require('./WorkOrder')
@@ -57,6 +61,10 @@ SalesOrderLine.belongsTo(SalesOrder, { foreignKey: 'so_id', targetKey: 'id' })
 
 // 打印任务相关
 PrintJob.hasMany(ScanLog, { foreignKey: 'print_job_id', sourceKey: 'id' })
+
+// 扫码候选选择训练数据
+ScanSession.hasMany(ScanCandidate, { foreignKey: 'scan_session_id', sourceKey: 'id', as: 'candidates' })
+ScanCandidate.belongsTo(ScanSession, { foreignKey: 'scan_session_id', targetKey: 'id', as: 'session' })
 
 // 生产制造相关 (BOM)
 BOMHeader.hasMany(BOMLine, { foreignKey: 'bom_id', as: 'lines' })
@@ -152,6 +160,10 @@ const syncDatabase = async () => {
     await PrintJob.sync()
     await ensurePrintJobSchema()
     await ScanLog.sync()
+    await ScannerBenchmark.sync()
+    await ScannerSelectionSample.sync()
+    await ScanSession.sync()
+    await ScanCandidate.sync()
     // await BillOfMaterials.sync() // Deprecated
     await BOMHeader.sync()
     await BOMLine.sync()
@@ -180,6 +192,10 @@ module.exports = {
   SalesOrderLine,
   PrintJob,
   ScanLog,
+  ScannerBenchmark,
+  ScannerSelectionSample,
+  ScanSession,
+  ScanCandidate,
   BOMHeader,
   BOMLine,
   WorkOrder,

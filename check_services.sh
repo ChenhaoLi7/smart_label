@@ -33,7 +33,7 @@ else
 fi
 
 # 检查前端代理
-if curl -s http://localhost:8080/api/health > /dev/null 2>&1; then
+if curl -ks https://localhost:8080/api/health > /dev/null 2>&1; then
     echo "  ✅ 前端服务 (8080) - 正常"
 else
     echo "  ❌ 前端服务 (8080) - 异常"
@@ -41,8 +41,7 @@ fi
 
 echo ""
 echo "📱 访问地址："
-echo "  🌐 前端: http://localhost:8080"
+echo "  🌐 前端: https://localhost:8080"
 echo "  🔧 后端: http://localhost:3000"
 echo "  🤖 AI服务: http://localhost:8000"
-
 

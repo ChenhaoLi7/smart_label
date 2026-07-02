@@ -13,6 +13,7 @@ const aiAgentRoutes = require('./aiAgent')
 const productionRoutes = require('./production')
 const barcodeRoutes = require('./barcode')
 const suggestionRoutes = require('./suggestions')
+const scannerAssistRoutes = require('./scannerAssist')
 
 // 注册路由
 router.use('/auth', authRoutes)
@@ -25,6 +26,7 @@ router.use('/scan', scanRoutes)
 router.use('/production', productionRoutes)
 router.use('/barcode', barcodeRoutes)
 router.use('/suggestions', suggestionRoutes)
+router.use('/scanner', scannerAssistRoutes)
 
 // 健康检查
 router.get('/health', async (req, res) => {

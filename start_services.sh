@@ -2,7 +2,7 @@
 
 echo "🚀 启动智能标签系统..."
 
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH="/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 # 基于脚本位置定位项目根目录，避免硬编码路径错误
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,7 +81,7 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 # 启动前端服务并允许局域网访问
-npm run serve -- --host 0.0.0.0 --port 8080 &
+npm run serve -- --host 0.0.0.0 --port 8080 --skip-plugins @vue/cli-plugin-eslint &
 FRONTEND_PID=$!
 
 # 获取本机网络地址

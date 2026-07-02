@@ -1,5 +1,5 @@
 # ai_service/app.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
@@ -14,10 +14,24 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
 import joblib
+import json
 import os
+import sys
+import time
+import tempfile
+from pathlib import Path
 from typing import List, Dict, Any
 import warnings
 warnings.filterwarnings('ignore')
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OBB_PIPELINE_DIR = PROJECT_ROOT / "barcode_obb_pipeline"
+if OBB_PIPELINE_DIR.exists() and str(OBB_PIPELINE_DIR) not in sys.path:
+    sys.path.insert(0, str(OBB_PIPELINE_DIR))
+
+ROI_MODEL_PATH = Path(os.getenv("ROI_OBB_MODEL_PATH", OBB_PIPELINE_DIR / "models" / "best_obb.pt"))
+ROI_ASSIST_MAX_UPLOAD_BYTES = int(os.getenv("ROI_ASSIST_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
+ROI_ASSIST_KEEP_UPLOADS = os.getenv("ROI_ASSIST_KEEP_UPLOADS", "0") == "1"
 
 app = FastAPI(title="智能仓库AI服务", version="1.0.0")
 
@@ -29,6 +43,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def _is_roi_model_cached() -> bool:
+    try:
+        from src.obb_detect import is_model_cached
+
+        return is_model_cached(ROI_MODEL_PATH)
+    except Exception:
+        return False
+
+
+@app.on_event("startup")
+async def preload_roi_assist_model():
+    """Load the OBB model once so the first ROI Assist request is not cold."""
+    if not ROI_MODEL_PATH.exists() or not OBB_PIPELINE_DIR.exists():
+        return
+
+    try:
+        from src.obb_detect import get_obb_model
+
+        get_obb_model(str(ROI_MODEL_PATH))
+    except Exception as error:
+        print(f"[roi-assist] OBB model preload skipped: {error}")
+
 
 # 数据模型
 class DemandRequest(BaseModel):
@@ -66,6 +103,162 @@ class InventoryOptimizationResponse(BaseModel):
 # 全局变量存储模型
 models = {}
 scalers = {}
+
+def _check_import(module_name: str) -> Dict[str, Any]:
+    try:
+        __import__(module_name)
+        return {"available": True, "error": None}
+    except Exception as error:
+        return {"available": False, "error": str(error)}
+
+def _safe_trigger(value: str) -> str:
+    normalized = (value or "manual").strip().lower()
+    if normalized not in {"manual", "auto", "debug"}:
+        return "manual"
+    return normalized
+
+def _safe_mode(value: str) -> str:
+    normalized = (value or "obb").strip().lower()
+    if normalized == "rbb":
+        return "obb"
+    if normalized not in {"obb", "baseline"}:
+        return "obb"
+    return normalized
+
+def _parse_scan_frame(value: str) -> Dict[str, Any] | None:
+    if not value:
+        return None
+
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    try:
+        x = float(parsed.get("x", 0.0))
+        y = float(parsed.get("y", 0.0))
+        width = float(parsed.get("width", 0.0))
+        height = float(parsed.get("height", 0.0))
+    except (TypeError, ValueError):
+        return None
+
+    if width <= 0 or height <= 0:
+        return None
+
+    return {
+        "x": max(0.0, min(1.0, x)),
+        "y": max(0.0, min(1.0, y)),
+        "width": max(0.01, min(1.0, width)),
+        "height": max(0.01, min(1.0, height)),
+        "reference": parsed.get("reference") or "scan_frame",
+    }
+
+def _pipeline_health() -> Dict[str, Any]:
+    return {
+        "service": "roi-assist",
+        "model_path": str(ROI_MODEL_PATH),
+        "model_ready": ROI_MODEL_PATH.exists(),
+        "model_cached": _is_roi_model_cached(),
+        "pipeline_dir": str(OBB_PIPELINE_DIR),
+        "pipeline_ready": OBB_PIPELINE_DIR.exists(),
+        "dependencies": {
+            "cv2": _check_import("cv2"),
+            "pyzbar": _check_import("pyzbar"),
+            "ultralytics": _check_import("ultralytics"),
+        }
+    }
+
+def _normalize_pipeline_result(result: Dict[str, Any], *, method: str) -> Dict[str, Any]:
+    return {
+        "success": bool(result.get("success")),
+        "method": method,
+        "decoded_texts": result.get("decoded_texts", []),
+        "decoded_types": result.get("decoded_types", []),
+        "processing_time_ms": result.get("total_processing_time_ms", result.get("processing_time_ms")),
+        "error": result.get("error"),
+        "candidates": result.get("candidates", []),
+        "best_candidate": result.get("best_candidate"),
+        "arbitration": result.get("arbitration"),
+        "raw": result,
+    }
+
+def _build_baseline_candidates(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    decoded_texts = result.get("decoded_texts") or []
+    decoded_types = result.get("decoded_types") or []
+    candidates = []
+
+    for index, text in enumerate(decoded_texts):
+        if not text:
+            continue
+        candidates.append({
+            "candidate_id": f"baseline-{index + 1}",
+            "source": "server_whole_image",
+            "class_name": decoded_types[index] if index < len(decoded_types) else "CODE",
+            "confidence": None,
+            "success": True,
+            "decoded_text": str(text),
+            "decoded_texts": [str(text)],
+            "decoded_types": [decoded_types[index]] if index < len(decoded_types) else [],
+            "best_preprocessing_mode": "whole_image",
+            "score": 0.64,
+            "quality_score": None,
+            "center_distance_ratio": None,
+            "roi_width": None,
+            "roi_height": None,
+            "brightness": None,
+            "contrast": None,
+            "blur_score": None,
+            "error": None,
+        })
+
+    return candidates
+
+def _merge_roi_candidates(*candidate_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen_texts = set()
+
+    for group in candidate_groups:
+        for candidate in group or []:
+            decoded_text = candidate.get("decoded_text")
+            decoded_texts = candidate.get("decoded_texts") or ([decoded_text] if decoded_text else [])
+            normalized_text = next((str(text).strip() for text in decoded_texts if str(text).strip()), "")
+
+            if candidate.get("success") and normalized_text:
+                if normalized_text in seen_texts:
+                    continue
+                seen_texts.add(normalized_text)
+                candidate = {**candidate, "decoded_text": normalized_text}
+
+            merged.append(candidate)
+
+    return sorted(merged, key=lambda item: item.get("score") or 0.0, reverse=True)
+
+def _build_roi_arbitration(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    successful = [candidate for candidate in candidates if candidate.get("success") and candidate.get("decoded_text")]
+    unique_texts = []
+    for candidate in successful:
+        text = str(candidate.get("decoded_text") or "").strip()
+        if text and text not in unique_texts:
+            unique_texts.append(text)
+
+    best = successful[0] if successful else None
+    runner_up = successful[1] if len(successful) > 1 else None
+    score_margin = None
+    if best and runner_up:
+        score_margin = round((best.get("score") or 0.0) - (runner_up.get("score") or 0.0), 4)
+
+    return {
+        "candidate_count": len(successful),
+        "unique_decoded_count": len(unique_texts),
+        "requires_user_selection": len(unique_texts) > 1,
+        "auto_selectable": len(unique_texts) == 1,
+        "score_margin": score_margin,
+        "selected_candidate_id": best.get("candidate_id") if best else None,
+        "selected_text": best.get("decoded_text") if best else None,
+    }
 
 def create_lstm_model(input_shape):
     """创建LSTM模型"""
@@ -268,6 +461,120 @@ async def cluster_items(data: List[Dict[str, Any]]):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"聚类分析失败: {str(e)}")
+
+@app.get("/scanner/roi-assist/health")
+async def scanner_roi_assist_health():
+    """ROI Assist health check for barcode OBB fallback."""
+    return _pipeline_health()
+
+@app.post("/scanner/roi-assist")
+async def scanner_roi_assist(
+    frame: UploadFile = File(...),
+    mode: str = Form("obb"),
+    trigger: str = Form("manual"),
+    operation_context: str = Form(""),
+    scan_frame: str = Form("")
+):
+    """Decode one uploaded scanner frame using server-side ROI assist.
+
+    The endpoint first tries server-side whole-image decoding as a cheap fallback.
+    If that fails and mode=obb, it tries the YOLO-OBB rotated ROI pipeline.
+    """
+    started_at = time.perf_counter()
+    normalized_mode = _safe_mode(mode)
+    normalized_trigger = _safe_trigger(trigger)
+    normalized_scan_frame = _parse_scan_frame(scan_frame)
+
+    if not OBB_PIPELINE_DIR.exists():
+        raise HTTPException(status_code=503, detail="barcode_obb_pipeline directory is missing")
+
+    payload = await frame.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Uploaded frame is empty")
+    if len(payload) > ROI_ASSIST_MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Uploaded frame is too large")
+
+    suffix = Path(frame.filename or "frame.jpg").suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+        suffix = ".jpg"
+
+    temp_dir = OBB_PIPELINE_DIR / "data" / "results" / "roi_assist_uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=suffix,
+            prefix=f"{normalized_trigger}_",
+            dir=temp_dir,
+            delete=False,
+        ) as temp_file:
+            temp_file.write(payload)
+            temp_path = Path(temp_file.name)
+
+        from src.baseline_decode import decode_whole_image
+        from src.proposed_obb_decode import decode_with_obb_candidates
+
+        baseline_result = _normalize_pipeline_result(
+            decode_whole_image(str(temp_path)),
+            method="server_whole_image",
+        )
+        baseline_candidates = _build_baseline_candidates(baseline_result)
+        proposed_result = None
+        proposed_candidates = []
+        selected_result = baseline_result
+
+        if normalized_mode == "obb":
+            proposed_result = _normalize_pipeline_result(
+                decode_with_obb_candidates(
+                    str(temp_path),
+                    str(ROI_MODEL_PATH),
+                    target_frame=normalized_scan_frame,
+                ),
+                method="yolo_obb_roi",
+            )
+            proposed_candidates = proposed_result.get("candidates") or []
+            selected_result = proposed_result if proposed_result["success"] else baseline_result
+
+        all_candidates = _merge_roi_candidates(baseline_candidates, proposed_candidates)
+        arbitration = _build_roi_arbitration(all_candidates)
+        best_candidate = all_candidates[0] if all_candidates else None
+        selected_texts = [candidate.get("decoded_text") for candidate in all_candidates if candidate.get("success") and candidate.get("decoded_text")]
+        selected_types = []
+        for candidate in all_candidates:
+            for decoded_type in candidate.get("decoded_types") or []:
+                if decoded_type and decoded_type not in selected_types:
+                    selected_types.append(decoded_type)
+
+        return {
+            "success": bool(selected_result["success"] or selected_texts),
+            "trigger": normalized_trigger,
+            "mode": normalized_mode,
+            "operation_context": operation_context,
+            "scan_frame": normalized_scan_frame,
+            "method": selected_result["method"],
+            "decoded_texts": selected_texts or selected_result["decoded_texts"],
+            "decoded_types": selected_types or selected_result["decoded_types"],
+            "processing_time_ms": round((time.perf_counter() - started_at) * 1000, 2),
+            "model_ready": ROI_MODEL_PATH.exists(),
+            "model_path": str(ROI_MODEL_PATH),
+            "error": selected_result.get("error"),
+            "candidates": all_candidates,
+            "best_candidate": best_candidate,
+            "arbitration": arbitration,
+            "baseline": baseline_result,
+            "proposed": proposed_result,
+        }
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"ROI Assist failed: {error}")
+    finally:
+        if temp_path and temp_path.exists() and not ROI_ASSIST_KEEP_UPLOADS:
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
 
 @app.get("/health")
 async def health_check():

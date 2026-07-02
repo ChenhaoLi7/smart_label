@@ -1,0 +1,8 @@
+path: "/Users/lichenhao/Desktop/桌面 - 晨皓のMac mini/smart label /barcode_obb_pipeline/data/yolo_obb_dataset"
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: barcode_1d
+  1: qr_code
