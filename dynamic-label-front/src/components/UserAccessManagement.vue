@@ -41,7 +41,7 @@
         <strong>{{ summary.operator }}</strong>
       </article>
       <article class="summary-card">
-        <span class="summary-label">Viewers</span>
+        <span class="summary-label">Customers</span>
         <strong>{{ summary.viewer }}</strong>
       </article>
     </section>
@@ -52,8 +52,8 @@
         <h2>Admins stay protected</h2>
       </div>
       <p>
-        You can promote non-admin users to admin here. Existing admins cannot be downgraded from this screen.
-        New admin access takes effect after that user signs in again.
+        New public registrations are customers and can only use the shop. Switch a customer to operator to give staff scanning access,
+        or promote a non-admin user to admin. Existing admins cannot be downgraded from this screen. Changes take effect after that user signs in again.
       </p>
     </section>
 
@@ -124,11 +124,19 @@
             </div>
             <div>
               <span class="meta-label">Access</span>
-              <strong>{{ user.role === 'admin' ? 'Locked Admin' : 'Can Be Promoted' }}</strong>
+              <strong>{{ user.role === 'admin' ? 'Locked Admin' : user.role === 'viewer' ? 'Shop only' : 'Staff scanning' }}</strong>
             </div>
           </div>
 
           <div class="card-actions">
+            <button
+              v-if="user.role !== 'admin' && user.username !== currentUsername"
+              class="glass-btn"
+              :disabled="promotingUserId === user.id"
+              @click="setRole(user, user.role === 'viewer' ? 'operator' : 'viewer')"
+            >
+              {{ user.role === 'viewer' ? 'Make Operator' : 'Make Customer' }}
+            </button>
             <button
               v-if="user.role !== 'admin'"
               class="primary-btn"
@@ -211,7 +219,7 @@ const getInitials = (username) => {
 
 const roleLabel = (role) => {
   if (role === 'admin') return 'Admin'
-  if (role === 'viewer') return 'Viewer'
+  if (role === 'viewer') return 'Customer'
   return 'Operator'
 }
 
@@ -293,6 +301,35 @@ const promoteUser = async (user) => {
       }
     })
     feedbackMessage.value = result.message || 'Admin access granted successfully'
+  } catch (error) {
+    errorMessage.value = error.message || 'Failed to update user role'
+  } finally {
+    promotingUserId.value = null
+  }
+}
+
+const setRole = async (user, nextRole) => {
+  const label = nextRole === 'operator' ? 'operator (staff scanning)' : 'customer (shop only)'
+  if (!window.confirm(`Change ${user.username} to ${label}?`)) return
+  promotingUserId.value = user.id
+  feedbackMessage.value = ''
+  errorMessage.value = ''
+  try {
+    const response = await fetch(`/api/auth/users/${user.id}/role`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: JSON.stringify({ role: nextRole })
+    })
+    if (response.status === 401) {
+      handleUnauthorized()
+      return
+    }
+    const result = await response.json()
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Failed to update user role')
+    }
+    users.value = users.value.map((entry) => entry.id === user.id ? { ...entry, role: nextRole, updatedAt: result.data.user.updatedAt } : entry)
+    feedbackMessage.value = result.message || 'Role updated'
   } catch (error) {
     errorMessage.value = error.message || 'Failed to update user role'
   } finally {

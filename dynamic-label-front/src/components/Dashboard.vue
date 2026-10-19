@@ -78,6 +78,24 @@
                 </span>
               </a>
 
+              <a v-if="isAdmin" href="#" class="nav-link" @click.prevent="goToInventoryAnalytics">
+                <span class="nav-glyph">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+                    <path d="M5 20v-7"/>
+                    <path d="M12 20V4"/>
+                    <path d="M19 20v-11"/>
+                  </svg>
+                </span>
+                <span class="nav-copy">
+                  <strong>Analytics</strong>
+                  <small>SKU usage and user activity</small>
+                </span>
+              </a>
+
+              <a href="#" class="nav-link" @click.prevent="router.push('/candidate-recommendation')"><span class="nav-glyph">◎</span><span class="nav-copy"><strong>Target recommendation</strong><small>Task, position and personal history</small></span></a>
+              <a v-if="isAdmin" href="#" class="nav-link" @click.prevent="router.push('/sku-forecast')"><span class="nav-glyph">↗</span><span class="nav-copy"><strong>Sales forecast</strong><small>Seven-day SKU outlook</small></span></a>
+              <a href="#" class="nav-link" @click.prevent="router.push('/shop')"><span class="nav-glyph">◍</span><span class="nav-copy"><strong>Office shop</strong><small>Browse and add to your tab</small></span></a>
+              <a href="#" class="nav-link" @click.prevent="router.push('/shop-tabs')"><span class="nav-glyph">¥</span><span class="nav-copy"><strong>Shop admin</strong><small>{{ isAdmin ? 'Billing, sale stock, returns' : 'Return requests' }}</small></span></a>
               <a href="#" class="nav-link" @click.prevent="goToSuggestions">
                 <span class="nav-glyph">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
@@ -137,6 +155,20 @@
                 </span>
               </a>
 
+              <a v-if="isAdmin" href="#" class="nav-link" @click.prevent="goToRecoveryBenchmark">
+                <span class="nav-glyph">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+                    <path d="M9 3h6"/>
+                    <path d="M10 3v5l-5 9a2 2 0 0 0 1.75 3h10.5A2 2 0 0 0 19 17l-5-9V3"/>
+                    <path d="M8 14h8"/>
+                  </svg>
+                </span>
+                <span class="nav-copy">
+                  <strong>Recovery Lab</strong>
+                  <small>Phase 1 labels and references</small>
+                </span>
+              </a>
+
               <a v-if="isAdmin" href="#" class="nav-link" @click.prevent="goToAiAssistant">
                 <span class="nav-glyph">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
@@ -153,31 +185,6 @@
             </nav>
           </div>
 
-          <div class="sidebar-section">
-            <p class="sidebar-caption">Quick Actions</p>
-            <button v-if="isAdmin" class="sidebar-action secondary" @click="goToInventoryManagement">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>
-              </svg>
-              Open Inventory
-            </button>
-            <button class="sidebar-action secondary" @click="goToSuggestions">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-              </svg>
-              {{ isAdmin ? 'Open Suggestions' : 'Write Suggestion' }}
-              <span v-if="suggestionBadgeCount > 0" class="sidebar-badge">{{ suggestionBadgeCount }}</span>
-            </button>
-            <button v-if="isAdmin" class="sidebar-action secondary" @click="goToUserAccess">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-                <circle cx="9" cy="7" r="4"/>
-                <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-              </svg>
-              Manage Users
-            </button>
-          </div>
           <button
             class="sidebar-toggle"
             @click="toggleSidebar"
@@ -198,133 +205,104 @@
 
       <main class="content">
         <template v-if="isAdmin">
-          <section class="hero-card">
-            <div class="hero-copy">
-              <p class="eyebrow">Pilot Control Center</p>
-              <h2 class="hero-title">Warehouse health, condensed into one calm screen.</h2>
-              <p class="hero-subtitle">
-                Keep this page focused on the numbers that matter, the risks that need attention, and the next action your team should take.
-              </p>
-
-              <div class="hero-meta">
-                <div class="meta-pill">
-                  <span class="meta-label">Today</span>
-                  <strong>{{ formattedToday }}</strong>
-                </div>
-                <div class="meta-pill">
-                  <span class="meta-label">System Health</span>
-                  <strong>{{ healthSummary }}</strong>
-                </div>
-                <div class="meta-pill">
-                  <span class="meta-label">Utilization</span>
-                  <strong>{{ systemStats.utilization }}</strong>
-                </div>
-              </div>
+          <section class="overview-heading">
+            <div>
+              <p class="eyebrow">Dashboard</p>
+              <h2>Inventory overview</h2>
+              <p>Current stock coverage and the few signals that need a decision.</p>
             </div>
-
-            <div class="hero-side">
-              <div class="halo-ring">
-                <svg viewBox="0 0 120 120" class="score-ring">
-                  <circle cx="60" cy="60" r="44" class="score-track" />
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r="44"
-                    class="score-progress"
-                    :style="{ strokeDashoffset: scoreDashoffset }"
-                  />
-                </svg>
-                <div class="halo-center">
-                  <span class="score-value">{{ healthScore }}</span>
-                  <span class="score-label">Health</span>
-                </div>
-              </div>
-
-              <div class="hero-buttons">
-                <button v-if="isAdmin" class="apple-button soft" @click="goToInventoryManagement">
-                  Open Inventory
-                </button>
+            <div class="overview-status" :class="{ warning: systemStats.lowStockCount > 0 }">
+              <span class="status-dot"></span>
+              <div>
+                <strong>{{ inventoryStatusLabel }}</strong>
+                <small>{{ lastUpdatedLabel }}</small>
               </div>
             </div>
           </section>
 
-          <section class="stats-grid">
+          <section class="summary-grid">
             <article
-              v-for="card in statCards"
+              v-for="card in summaryCards"
               :key="card.label"
-              class="stat-card"
-              :class="card.tone"
+              class="summary-card"
+              :class="{ warning: card.warning }"
             >
-              <div class="stat-topline">
-                <span class="mini-badge">{{ card.badge }}</span>
-                <span class="card-icon" v-html="card.icon"></span>
+              <div class="summary-card-topline">
+                <span>{{ card.label }}</span>
+                <span class="summary-icon" v-html="card.icon"></span>
               </div>
-              <div class="stat-value">{{ card.value }}</div>
-              <div class="stat-label">{{ card.label }}</div>
-              <p class="stat-note">{{ card.note }}</p>
-              <div class="sparkline">
-                <span v-for="(bar, index) in card.spark" :key="`${card.label}-${index}`" :style="{ height: `${bar}%` }"></span>
-              </div>
+              <strong class="summary-value">{{ card.value }}</strong>
+              <p>{{ card.note }}</p>
             </article>
           </section>
 
-          <section class="dashboard-grid">
-            <article class="panel panel-wide">
+          <section class="admin-workspace-grid">
+            <article class="panel action-panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Attention Panel</p>
-                  <h3>What needs action</h3>
+                  <p class="eyebrow">Needs attention</p>
+                  <h3>Review queue</h3>
                 </div>
-                <span class="panel-chip">{{ alertCount }} active signals</span>
+                <span v-if="dashboardAlerts.length" class="panel-chip warning-chip">
+                  {{ dashboardAlerts.length }} active
+                </span>
               </div>
 
-              <div class="attention-list">
-                <div v-for="item in attentionItems" :key="item.title" class="attention-item">
-                  <div class="attention-marker" :class="item.tone"></div>
-                  <div class="attention-copy">
+              <div v-if="dashboardAlerts.length" class="review-list">
+                <button
+                  v-for="item in dashboardAlerts"
+                  :key="item.title"
+                  class="review-row"
+                  @click="item.run"
+                >
+                  <span class="review-count">{{ item.value }}</span>
+                  <div>
                     <strong>{{ item.title }}</strong>
                     <p>{{ item.description }}</p>
                   </div>
-                  <span class="attention-value">{{ item.value }}</span>
-                </div>
-              </div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Snapshot</p>
-                  <h3>Operational balance</h3>
-                </div>
-              </div>
-
-              <div class="balance-stack">
-                <div v-for="segment in balanceSegments" :key="segment.label" class="balance-row">
-                  <div class="balance-copy">
-                    <span>{{ segment.label }}</span>
-                    <strong>{{ segment.value }}</strong>
-                  </div>
-                  <div class="balance-bar">
-                    <div class="balance-fill" :style="{ width: `${segment.percent}%` }"></div>
-                  </div>
-                </div>
-              </div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Quick Access</p>
-                  <h3>Core workspaces</h3>
-                </div>
-              </div>
-
-              <div class="action-grid">
-                <button v-for="action in primaryActions" :key="action.label" class="action-tile" @click="action.run">
-                  <span class="action-icon" v-html="action.icon"></span>
-                  <strong>{{ action.label }}</strong>
-                  <small>{{ action.description }}</small>
+                  <span class="review-link">Review</span>
                 </button>
+              </div>
+
+              <div v-else class="dashboard-empty-state">
+                <span class="empty-check">✓</span>
+                <div>
+                  <strong>Nothing needs attention</strong>
+                  <p>Stock levels and team requests are currently clear.</p>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel activity-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Inventory history</p>
+                  <h3>Recent activity</h3>
+                </div>
+                <button class="panel-text-button" @click="goToInventoryAnalytics">View analytics</button>
+              </div>
+
+              <div v-if="recentTransactions.length" class="activity-list">
+                <div v-for="transaction in recentTransactions" :key="transaction.id" class="activity-row">
+                  <span class="activity-type" :class="activityTone(transaction)">
+                    {{ activityLabel(transaction) }}
+                  </span>
+                  <div class="activity-copy">
+                    <strong>{{ transaction.itemName || transaction.itemCode }}</strong>
+                    <p>{{ transaction.itemCode }} · {{ transaction.operator || 'System' }}</p>
+                  </div>
+                  <div class="activity-meta">
+                    <strong>{{ activityQuantity(transaction) }}</strong>
+                    <time>{{ formatActivityTime(transaction.transactionTime) }}</time>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="dashboard-empty-state compact">
+                <span class="empty-check neutral">—</span>
+                <div>
+                  <strong>No inventory activity yet</strong>
+                  <p>Inbound, outbound, and cycle-count events will appear here.</p>
+                </div>
               </div>
             </article>
           </section>
@@ -432,7 +410,7 @@
         <section class="mobile-hero">
           <p class="eyebrow">Today</p>
           <h2>{{ formattedToday }}</h2>
-          <p>{{ healthSummary }} with {{ systemStats.lowStockCount }} low-stock item<span v-if="systemStats.lowStockCount !== 1">s</span>.</p>
+          <p>{{ inventoryStatusLabel }}.</p>
         </section>
 
         <section class="mobile-stats">
@@ -450,12 +428,18 @@
             <span v-if="suggestionBadgeCount > 0" class="mobile-badge">{{ suggestionBadgeCount }}</span>
           </button>
           <button class="mobile-action secondary" @click="goToAdvancedScan">Scan</button>
+          <button class="mobile-action secondary" @click="router.push('/candidate-recommendation')">Target recommendation</button>
+          <button class="mobile-action secondary" @click="router.push('/sku-forecast')">Sales forecast</button>
+          <button class="mobile-action secondary" @click="router.push('/shop')">Office shop</button>
+          <button class="mobile-action secondary" @click="router.push('/shop-tabs')">{{ isAdmin ? 'Shop admin' : 'Shop returns' }}</button>
+          <button class="mobile-action lab" @click="goToRecoveryBenchmark">Recovery Lab</button>
         </section>
 
         <nav class="mobile-nav">
           <a href="#" class="mobile-nav-item active" @click.prevent="router.push('/dashboard')">Home</a>
           <a v-if="isAdmin" href="#" class="mobile-nav-item" @click.prevent="goToInventoryManagement">Inventory</a>
           <a v-if="isAdmin" href="#" class="mobile-nav-item" @click.prevent="goToPrintCenter">Print</a>
+          <a v-if="isAdmin" href="#" class="mobile-nav-item lab" @click.prevent="goToRecoveryBenchmark">Lab</a>
           <a v-if="isAdmin" href="#" class="mobile-nav-item" @click.prevent="goToAiAssistant">AI</a>
         </nav>
       </template>
@@ -486,6 +470,12 @@
         </section>
 
         <section class="operator-focus-grid">
+          <button class="operator-focus-card" @click="router.push('/candidate-recommendation')">
+            <span class="operator-focus-eyebrow">Target recommendation</span>
+            <strong>Pick the right label</strong>
+            <p>Upload or capture one frame; the list is ordered by task, position and your past choices. You confirm the target.</p>
+          </button>
+
           <button class="operator-focus-card" @click="goToSuggestions">
             <span class="operator-focus-eyebrow">Suggestions</span>
             <strong>{{ operatorSuggestionTitle }}</strong>
@@ -536,12 +526,13 @@ const isAdmin = computed(() => userRole.value === 'admin')
 const sidebarPinned = ref(false)
 const isHovered = ref(false)
 const isMobile = ref(false)
+const lastUpdated = ref(null)
+const recentTransactions = ref([])
 
 const systemStats = ref({
   totalItems: 0,
   totalLots: 0,
   totalBins: 0,
-  utilization: '0%',
   lowStockCount: 0
 })
 const suggestionSummary = ref({
@@ -565,35 +556,12 @@ const desktopShellStyle = computed(() => ({
   gridTemplateColumns: `${isSidebarCollapsed.value ? 96 : 300}px minmax(0, 1fr)`
 }))
 
-const utilizationNumber = computed(() => {
-  const parsed = Number.parseFloat(String(systemStats.value.utilization).replace('%', ''))
-  return Number.isFinite(parsed) ? parsed : 0
-})
-
-const healthScore = computed(() => {
-  const base = 82
-  const lowStockPenalty = Math.min(systemStats.value.lowStockCount * 8, 40)
-  const utilizationPenalty = utilizationNumber.value < 55 ? Math.round((55 - utilizationNumber.value) * 0.6) : 0
-  return Math.max(42, Math.min(98, base - lowStockPenalty - utilizationPenalty))
-})
-
-const healthSummary = computed(() => {
-  if (healthScore.value >= 85) return 'Warehouse is running smoothly'
-  if (healthScore.value >= 70) return 'Operations are stable'
-  return 'A few items need attention'
-})
-
 const formattedToday = computed(() => {
   return new Intl.DateTimeFormat('en-US', {
     month: 'long',
     day: 'numeric',
     year: 'numeric'
   }).format(new Date())
-})
-
-const scoreDashoffset = computed(() => {
-  const circumference = 2 * Math.PI * 44
-  return circumference - (circumference * healthScore.value) / 100
 })
 
 const suggestionBadgeCount = computed(() => {
@@ -604,141 +572,72 @@ const suggestionBadgeCount = computed(() => {
   return (suggestionSummary.value.PLANNED || 0) + (suggestionSummary.value.DECLINED || 0)
 })
 
-const statCards = computed(() => [
+const inventoryStatusLabel = computed(() => {
+  const count = systemStats.value.lowStockCount
+  return count > 0
+    ? `${count} item${count === 1 ? '' : 's'} need attention`
+    : 'Inventory is on target'
+})
+
+const lastUpdatedLabel = computed(() => {
+  if (!lastUpdated.value) return 'Waiting for the first refresh'
+  return `Updated ${new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(lastUpdated.value)}`
+})
+
+const summaryCards = computed(() => [
   {
     label: 'Tracked Items',
     value: systemStats.value.totalItems,
-    note: `${systemStats.value.lowStockCount} item${systemStats.value.lowStockCount === 1 ? '' : 's'} below target`,
-    badge: systemStats.value.lowStockCount > 0 ? 'Watchlist' : 'Stable',
-    tone: systemStats.value.lowStockCount > 0 ? 'tone-warm' : 'tone-cool',
-    spark: [34, 52, 48, 66, 72, 82],
-    icon: cardIcon('M3 7h18M7 3v18M17 3v18', 'box')
+    note: 'SKUs registered in inventory',
+    icon: summaryIcon('M3 7h18M7 3v18M17 3v18')
   },
   {
     label: 'Live Lots',
     value: systemStats.value.totalLots,
-    note: systemStats.value.totalLots > 0 ? 'Batch coverage looks healthy' : 'No lots recorded yet',
-    badge: 'Flow',
-    tone: 'tone-neutral',
-    spark: [24, 32, 44, 46, 57, 63],
-    icon: cardIcon('M4 7l8-4 8 4-8 4-8-4Zm0 5 8 4 8-4M4 17l8 4 8-4', 'layers')
+    note: 'Active batches with stock',
+    icon: summaryIcon('M4 7l8-4 8 4-8 4-8-4Zm0 5 8 4 8-4M4 17l8 4 8-4')
   },
   {
     label: 'Storage Bins',
     value: systemStats.value.totalBins,
-    note: systemStats.value.totalBins > 0 ? 'Location network is available' : 'Bins still need setup',
-    badge: 'Space',
-    tone: 'tone-cool',
-    spark: [20, 24, 30, 41, 46, 55],
-    icon: cardIcon('M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z', 'cube')
+    note: 'Mapped warehouse locations',
+    icon: summaryIcon('M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z')
   },
   {
-    label: 'Utilization',
-    value: systemStats.value.utilization,
-    note: utilizationNumber.value >= 70 ? 'Space is being used efficiently' : 'Capacity can be improved',
-    badge: utilizationNumber.value >= 70 ? 'Healthy' : 'Review',
-    tone: utilizationNumber.value >= 70 ? 'tone-emerald' : 'tone-neutral',
-    spark: [28, 37, 42, 54, 67, 78],
-    icon: cardIcon('M12 20V10M18 20V4M6 20v-6', 'bars')
+    label: 'Low Stock',
+    value: systemStats.value.lowStockCount,
+    note: 'Items below replenishment target',
+    warning: systemStats.value.lowStockCount > 0,
+    icon: summaryIcon('M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z')
   }
 ])
 
-const attentionItems = computed(() => {
-  const items = [
-    {
-      title: 'Low Stock',
-      description: systemStats.value.lowStockCount > 0 ? 'Replenishment should be reviewed today.' : 'No urgent replenishment signals detected.',
-      value: `${systemStats.value.lowStockCount}`,
-      tone: systemStats.value.lowStockCount > 0 ? 'danger' : 'ok'
-    },
-    {
-      title: 'Lot Coverage',
-      description: systemStats.value.totalLots > 0 ? 'Traceability is available across current inventory.' : 'No lots have been created yet.',
-      value: `${systemStats.value.totalLots}`,
-      tone: systemStats.value.totalLots > 0 ? 'ok' : 'soft'
-    },
-    {
-      title: 'Bin Network',
-      description: systemStats.value.totalBins > 0 ? 'Storage locations are mapped and ready.' : 'Warehouse bin map is still empty.',
-      value: `${systemStats.value.totalBins}`,
-      tone: systemStats.value.totalBins > 0 ? 'ok' : 'soft'
-    }
-  ]
+const dashboardAlerts = computed(() => {
+  const items = []
 
-  if (isAdmin.value) {
+  if (systemStats.value.lowStockCount > 0) {
     items.push({
-      title: 'New Suggestions',
-      description: suggestionSummary.value.NEW > 0 ? 'Team requests are waiting for admin review.' : 'No new product suggestions are waiting.',
-      value: `${suggestionSummary.value.NEW || 0}`,
-      tone: suggestionSummary.value.NEW > 0 ? 'danger' : 'ok'
+      title: 'Low-stock items',
+      description: 'Replenishment levels should be reviewed.',
+      value: systemStats.value.lowStockCount,
+      run: goToInventoryManagement
     })
-  } else {
-    const updates = (suggestionSummary.value.PLANNED || 0) + (suggestionSummary.value.DECLINED || 0)
+  }
+
+  if (suggestionSummary.value.NEW > 0) {
     items.push({
-      title: 'Suggestion Updates',
-      description: updates > 0 ? 'Some of your requests already have decisions.' : 'No reviewed suggestion updates yet.',
-      value: `${updates}`,
-      tone: updates > 0 ? 'ok' : 'soft'
+      title: 'New suggestions',
+      description: 'Team requests are waiting for review.',
+      value: suggestionSummary.value.NEW,
+      run: goToSuggestions
     })
   }
 
   return items
 })
-
-const alertCount = computed(() => attentionItems.value.filter((item) => item.tone !== 'ok').length)
-
-const balanceSegments = computed(() => {
-  const items = Math.max(systemStats.value.totalItems, 1)
-  const lots = Math.min(100, Math.round((systemStats.value.totalLots / items) * 100))
-  const bins = Math.min(100, Math.round((systemStats.value.totalBins / items) * 100))
-
-  return [
-    { label: 'Inventory coverage', value: `${systemStats.value.totalItems} items`, percent: 100 },
-    { label: 'Lot density', value: `${systemStats.value.totalLots} lots`, percent: Math.max(lots, 12) },
-    { label: 'Bin readiness', value: `${systemStats.value.totalBins} bins`, percent: Math.max(bins, 10) }
-  ]
-})
-
-const primaryActions = computed(() => [
-  {
-    label: 'Inventory',
-    description: 'Inspect stock, lots and bin health',
-    run: goToInventoryManagement,
-    icon: tileIcon('M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z')
-  },
-  {
-    label: 'Print Center',
-    description: 'Manage print runs and outputs',
-    run: goToPrintCenter,
-    icon: tileIcon('M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z')
-  },
-  ...(isAdmin.value ? [{
-    label: 'Scan Metrics',
-    description: 'Measure scanner speed and failure scenarios',
-    run: goToScannerPerformance,
-    icon: tileIcon('M4 19V5M4 19h16M7 15l3-4 3 2 4-7M17 6h3v3')
-  }] : []),
-  ...(isAdmin.value ? [{
-    label: 'User Access',
-    description: 'Review team accounts and admin access',
-    run: goToUserAccess,
-    icon: tileIcon('M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.13a4 4 0 0 1 0 7.75M22 21v-2a4 4 0 0 0-3-3.87M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z')
-  }] : []),
-  {
-    label: 'Suggestions',
-    description: isAdmin.value
-      ? `${suggestionSummary.value.NEW || 0} new team requests`
-      : `${suggestionBadgeCount.value || 0} reviewed request updates`,
-    run: goToSuggestions,
-    icon: tileIcon('M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z')
-  },
-  {
-    label: 'AI Assistant',
-    description: 'Ask for guidance or quick summaries',
-    run: goToAiAssistant,
-    icon: tileIcon('M12 16v-4M12 8h.01M22 12a10 10 0 1 1-10-10')
-  }
-])
 
 const mobileCards = computed(() => [
   {
@@ -752,9 +651,9 @@ const mobileCards = computed(() => [
     note: 'Need review'
   },
   {
-    label: 'Utilization',
-    value: systemStats.value.utilization,
-    note: 'Space usage'
+    label: 'Live Lots',
+    value: systemStats.value.totalLots,
+    note: 'With stock'
   }
 ])
 
@@ -809,7 +708,13 @@ onUnmounted(() => {
 })
 
 async function refreshDashboard() {
-  await Promise.all([loadSystemStats(), loadUserInfo(), loadSuggestionSummary()])
+  await loadUserInfo()
+  await Promise.all([
+    loadSystemStats(),
+    loadSuggestionSummary(),
+    loadRecentTransactions()
+  ])
+  lastUpdated.value = new Date()
 }
 
 async function loadSystemStats() {
@@ -818,7 +723,6 @@ async function loadSystemStats() {
       totalItems: 0,
       totalLots: 0,
       totalBins: 0,
-      utilization: '0%',
       lowStockCount: 0
     }
     return
@@ -844,7 +748,6 @@ async function loadSystemStats() {
         totalItems: result.data.totalItems || 0,
         totalLots: result.data.totalLots || 0,
         totalBins: result.data.totalBins || 0,
-        utilization: `${result.data.utilization || 0}%`,
         lowStockCount: result.data.lowStockCount || 0
       }
     }
@@ -909,6 +812,40 @@ async function loadSuggestionSummary() {
   }
 }
 
+async function loadRecentTransactions() {
+  if (!isAdmin.value) {
+    recentTransactions.value = []
+    return
+  }
+
+  try {
+    const token = localStorage.getItem('token')
+    if (!token) return
+
+    const params = new URLSearchParams({
+      limit: '5',
+      sortBy: 'transactionTime',
+      sortOrder: 'DESC'
+    })
+    const response = await fetch(`/api/inventory-management/transactions?${params}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    })
+
+    if (!response.ok) return
+
+    const result = await response.json()
+    if (result.success) {
+      recentTransactions.value = result.data.transactions || []
+    }
+  } catch (error) {
+    console.error('加载最近库存记录失败:', error)
+  }
+}
+
 function handleAvatarUpdated(avatarUrl) {
   userAvatar.value = avatarUrl
 }
@@ -925,6 +862,10 @@ function goToInventoryManagement() {
   router.push('/inventory-management')
 }
 
+function goToInventoryAnalytics() {
+  router.push('/inventory-analytics')
+}
+
 function goToSuggestions() {
   router.push('/suggestions')
 }
@@ -935,6 +876,10 @@ function goToUserAccess() {
 
 function goToScannerPerformance() {
   router.push('/scanner-performance')
+}
+
+function goToRecoveryBenchmark() {
+  router.push('/recovery-benchmark')
 }
 
 function goToAiAssistant() {
@@ -963,9 +908,43 @@ function logout() {
   router.push('/login')
 }
 
-function cardIcon(path, cls) {
+function activityLabel(transaction) {
+  const notes = typeof transaction.notes === 'string' ? transaction.notes : ''
+  if (notes.startsWith('Cycle Count Adjustment:')) return 'Count'
+  if (notes.startsWith('BIN_TRANSFER:')) return 'Move'
+  return transaction.transactionType === 'in' ? 'Inbound' : 'Outbound'
+}
+
+function activityTone(transaction) {
+  const label = activityLabel(transaction)
+  if (label === 'Inbound') return 'inbound'
+  if (label === 'Outbound') return 'outbound'
+  return 'neutral'
+}
+
+function activityQuantity(transaction) {
+  const quantity = Math.abs(Number(transaction.quantity || 0))
+  if (activityLabel(transaction) === 'Inbound') return `+${quantity}`
+  if (activityLabel(transaction) === 'Outbound') return `−${quantity}`
+  return `${transaction.beforeQuantity ?? '—'} → ${transaction.afterQuantity ?? '—'}`
+}
+
+function formatActivityTime(value) {
+  if (!value) return 'Unknown time'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Unknown time'
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(date)
+}
+
+function summaryIcon(path) {
   return `
-    <svg class="${cls}" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
       <path d="${path}" />
     </svg>
   `
@@ -1180,15 +1159,13 @@ function tileIcon(path) {
 }
 
 .sidebar.collapsed .nav-copy,
-.sidebar.collapsed .sidebar-caption,
-.sidebar.collapsed .sidebar-action {
+.sidebar.collapsed .sidebar-caption {
   opacity: 0;
   pointer-events: none;
   transform: translateX(-8px);
 }
 
-.sidebar.collapsed .sidebar-caption,
-.sidebar.collapsed .sidebar-action {
+.sidebar.collapsed .sidebar-caption {
   display: none;
 }
 
@@ -1324,22 +1301,7 @@ function tileIcon(path) {
   color: var(--muted);
 }
 
-.sidebar-action {
-  width: 100%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: 18px;
-  border: 1px solid transparent;
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.22s ease, transform 0.22s ease, background 0.22s ease, box-shadow 0.22s ease;
-}
-
 .nav-badge,
-.sidebar-badge,
 .mobile-badge {
   display: inline-flex;
   align-items: center;
@@ -1354,29 +1316,26 @@ function tileIcon(path) {
   font-weight: 700;
 }
 
-.sidebar-badge,
 .mobile-badge {
   margin-left: 8px;
 }
 
-.sidebar-action + .sidebar-action {
-  margin-top: 8px;
-}
-
-.sidebar-action.primary,
-.apple-button.solid,
 .mobile-action.primary {
   background: linear-gradient(135deg, #111827, #2d3748);
   color: #fff;
   box-shadow: 0 18px 30px rgba(17, 24, 39, 0.18);
 }
 
-.sidebar-action.secondary,
-.apple-button.soft,
 .mobile-action.secondary {
   background: rgba(255, 255, 255, 0.7);
   color: var(--text);
   border-color: var(--border);
+}
+
+.mobile-action.lab {
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  border: 1px solid rgba(37, 99, 235, 0.18);
 }
 
 .sidebar-toggle {
@@ -1407,7 +1366,8 @@ function tileIcon(path) {
 
 .hero-card,
 .panel,
-.stat-card,
+.overview-heading,
+.summary-card,
 .mobile-hero,
 .mobile-card {
   background: var(--surface);
@@ -1559,79 +1519,11 @@ function tileIcon(path) {
   font-size: 15px;
 }
 
-.hero-side {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 22px;
-  padding: 20px;
-  border-radius: 28px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.38));
-  border: 1px solid rgba(255, 255, 255, 0.86);
-}
-
-.halo-ring {
-  position: relative;
-  width: 170px;
-  height: 170px;
-  display: grid;
-  place-items: center;
-}
-
-.score-ring {
-  width: 170px;
-  height: 170px;
-  transform: rotate(-90deg);
-}
-
-.score-track,
-.score-progress {
-  fill: none;
-  stroke-width: 10;
-}
-
-.score-track {
-  stroke: rgba(15, 23, 42, 0.08);
-}
-
-.score-progress {
-  stroke: url(#unused);
-  stroke: #111827;
-  stroke-dasharray: calc(2 * 3.14159 * 44);
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.4s ease;
-}
-
-.halo-center {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-.score-value {
-  font-size: 44px;
-  font-weight: 700;
-  letter-spacing: -0.05em;
-}
-
-.score-label {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: var(--muted);
-}
-
-.hero-buttons,
 .mobile-actions {
   display: flex;
   gap: 10px;
 }
 
-.apple-button,
 .mobile-action {
   border: none;
   border-radius: 999px;
@@ -1641,101 +1533,137 @@ function tileIcon(path) {
   cursor: pointer;
 }
 
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.stat-card {
-  padding: 22px;
-  border-radius: 28px;
-}
-
-.stat-topline {
+.overview-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 28px;
+  padding: 28px 30px;
+  border-radius: 28px;
 }
 
-.mini-badge,
-.panel-chip,
-.attention-value {
+.overview-heading h2 {
+  margin: 7px 0 0;
+  font-size: 34px;
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+}
+
+.overview-heading p:last-child {
+  margin: 9px 0 0;
+  color: var(--muted-strong);
+  font-size: 14px;
+}
+
+.overview-status {
+  min-width: 250px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(49, 196, 141, 0.08);
+  border: 1px solid rgba(49, 196, 141, 0.16);
+}
+
+.overview-status.warning {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
   border-radius: 999px;
+  background: var(--accent-mint);
+  box-shadow: 0 0 0 6px rgba(49, 196, 141, 0.12);
+}
+
+.overview-status.warning .status-dot {
+  background: var(--accent-amber);
+  box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.12);
+}
+
+.overview-status strong,
+.overview-status small {
+  display: block;
+}
+
+.overview-status strong {
+  font-size: 14px;
+}
+
+.overview-status small {
+  margin-top: 3px;
+  color: var(--muted);
   font-size: 12px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.summary-card {
+  padding: 20px;
+  border-radius: 24px;
+}
+
+.summary-card.warning {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: linear-gradient(145deg, rgba(255, 251, 235, 0.9), rgba(255, 255, 255, 0.76));
+}
+
+.summary-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted-strong);
+  font-size: 13px;
   font-weight: 600;
 }
 
-.mini-badge {
-  padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid rgba(15, 23, 42, 0.06);
+.summary-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--muted-strong);
 }
 
-.card-icon {
-  color: rgba(17, 24, 39, 0.72);
+.summary-card.warning .summary-icon {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
 }
 
-.stat-value {
-  margin-top: 28px;
-  font-size: 42px;
+.summary-value {
+  display: block;
+  margin-top: 22px;
+  font-size: 38px;
   font-weight: 700;
   letter-spacing: -0.05em;
 }
 
-.stat-label {
-  margin-top: 6px;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.stat-note {
-  min-height: 42px;
-  margin: 10px 0 0;
+.summary-card p {
+  margin: 6px 0 0;
   color: var(--muted);
-  line-height: 1.5;
-  font-size: 13px;
+  font-size: 12px;
 }
 
-.sparkline {
-  height: 54px;
-  margin-top: 18px;
-  display: flex;
-  align-items: end;
-  gap: 7px;
-}
-
-.sparkline span {
-  flex: 1;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(17, 24, 39, 0.2), rgba(17, 24, 39, 0.7));
-}
-
-.tone-cool .sparkline span {
-  background: linear-gradient(180deg, rgba(0, 113, 227, 0.2), rgba(0, 113, 227, 0.74));
-}
-
-.tone-warm .sparkline span {
-  background: linear-gradient(180deg, rgba(245, 158, 11, 0.2), rgba(245, 158, 11, 0.8));
-}
-
-.tone-emerald .sparkline span {
-  background: linear-gradient(180deg, rgba(49, 196, 141, 0.2), rgba(49, 196, 141, 0.8));
-}
-
-.dashboard-grid {
+.admin-workspace-grid {
   display: grid;
-  grid-template-columns: 1.6fr 1fr;
-  gap: 18px;
+  grid-template-columns: minmax(320px, 0.85fr) minmax(520px, 1.35fr);
+  gap: 14px;
+  align-items: start;
 }
 
 .panel {
   padding: 24px;
-  border-radius: 28px;
-}
-
-.panel-wide {
-  grid-row: span 2;
+  border-radius: 24px;
 }
 
 .panel-header {
@@ -1747,105 +1675,189 @@ function tileIcon(path) {
 
 .panel-header h3 {
   margin-top: 8px;
-  font-size: 28px;
+  font-size: 24px;
   letter-spacing: -0.03em;
 }
 
 .panel-chip {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
   padding: 8px 12px;
   background: rgba(17, 24, 39, 0.08);
   color: var(--muted-strong);
 }
 
-.attention-list {
+.warning-chip {
+  background: rgba(245, 158, 11, 0.1);
+  color: #9a4f08;
+}
+
+.review-list,
+.activity-list {
   margin-top: 24px;
   display: grid;
+}
+
+.review-list {
+  gap: 10px;
+}
+
+.review-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 14px;
-}
-
-.attention-item {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
-  gap: 16px;
   align-items: center;
-  padding: 18px;
-  border-radius: 22px;
+  padding: 16px;
+  border: 1px solid rgba(245, 158, 11, 0.14);
+  border-radius: 18px;
   background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.88);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease;
 }
 
-.attention-marker {
-  width: 10px;
-  height: 54px;
-  border-radius: 999px;
+.review-row:hover {
+  transform: translateY(-1px);
+  border-color: rgba(245, 158, 11, 0.32);
 }
 
-.attention-marker.ok {
-  background: linear-gradient(180deg, rgba(49, 196, 141, 0.9), rgba(49, 196, 141, 0.45));
-}
-
-.attention-marker.danger {
-  background: linear-gradient(180deg, rgba(239, 68, 68, 0.9), rgba(245, 158, 11, 0.55));
-}
-
-.attention-marker.soft {
-  background: linear-gradient(180deg, rgba(107, 114, 128, 0.65), rgba(107, 114, 128, 0.18));
-}
-
-.attention-copy strong {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 15px;
-}
-
-.attention-copy p {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--muted);
-}
-
-.attention-value {
-  padding: 8px 12px;
-  background: rgba(15, 23, 42, 0.06);
-}
-
-.balance-stack {
-  margin-top: 24px;
+.review-count {
+  width: 38px;
+  height: 38px;
   display: grid;
-  gap: 16px;
+  place-items: center;
+  border-radius: 13px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #9a4f08;
+  font-size: 15px;
+  font-weight: 700;
 }
 
-.balance-copy {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
+.review-row strong,
+.activity-copy strong,
+.dashboard-empty-state strong {
+  display: block;
   font-size: 14px;
 }
 
-.balance-copy strong {
-  font-size: 15px;
+.review-row p,
+.activity-copy p,
+.dashboard-empty-state p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
-.balance-bar {
-  height: 12px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.08);
-  overflow: hidden;
+.review-link,
+.panel-text-button {
+  color: var(--accent-blue);
+  font-size: 12px;
+  font-weight: 600;
 }
 
-.balance-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #111827 0%, #4b5563 100%);
+.panel-text-button {
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
 }
 
-.action-grid {
+.dashboard-empty-state {
+  min-height: 126px;
   margin-top: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 22px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px dashed rgba(15, 23, 42, 0.1);
+}
+
+.dashboard-empty-state.compact {
+  min-height: 166px;
+}
+
+.empty-check {
+  width: 38px;
+  height: 38px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 13px;
+  background: rgba(49, 196, 141, 0.12);
+  color: #17865f;
+  font-weight: 800;
+}
+
+.empty-check.neutral {
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--muted);
+}
+
+.activity-list {
+  gap: 0;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.07);
+}
+
+.activity-row:last-child {
+  border-bottom: none;
+}
+
+.activity-type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--muted-strong);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.activity-type.inbound {
+  background: rgba(49, 196, 141, 0.1);
+  color: #17865f;
+}
+
+.activity-type.outbound {
+  background: rgba(0, 113, 227, 0.09);
+  color: #075ea8;
+}
+
+.activity-meta {
+  text-align: right;
+}
+
+.activity-meta strong,
+.activity-meta time {
+  display: block;
+}
+
+.activity-meta strong {
+  font-size: 13px;
+}
+
+.activity-meta time {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .action-tile {
@@ -1860,8 +1872,6 @@ function tileIcon(path) {
 
 .action-tile:hover,
 .topbar-chip:hover,
-.sidebar-action:hover,
-.apple-button:hover,
 .mobile-action:hover,
 .logout-btn:hover,
 .mobile-logout:hover {
@@ -2184,7 +2194,7 @@ function tileIcon(path) {
   right: 16px;
   bottom: 16px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   padding: 10px;
   border-radius: 24px;
@@ -2210,12 +2220,17 @@ function tileIcon(path) {
   color: var(--text);
 }
 
+.mobile-nav-item.lab {
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+}
+
 @media (max-width: 1280px) {
   .hero-card {
     grid-template-columns: 1fr;
   }
 
-  .dashboard-grid {
+  .admin-workspace-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2223,16 +2238,26 @@ function tileIcon(path) {
     grid-template-columns: 1fr;
   }
 
-  .panel-wide {
-    grid-row: auto;
-  }
-
-  .stats-grid {
+  .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 768px) {
+  .overview-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .overview-status {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
   .mobile-stats {
     grid-template-columns: 1fr;
   }

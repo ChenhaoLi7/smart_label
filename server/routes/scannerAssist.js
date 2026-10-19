@@ -10,6 +10,7 @@ const {
   enrichCandidatesWithMlScores,
   loadRankerModel
 } = require('../services/scannerRankerModel')
+const { recordCandidateDecision } = require('../services/scannerSelectionDecision')
 
 const router = express.Router()
 const upload = multer({
@@ -494,6 +495,7 @@ const resolveItemDisplay = async (parsed) => {
     return {
       found: true,
       entityType: 'ITEM',
+      sku: item.sku,
       title: item.name || item.sku,
       subtitle: `SKU ${item.sku}`,
       primary: `${totalQty} ${item.uom || 'pcs'} available`,
@@ -526,6 +528,7 @@ const resolveLotDisplay = async (parsed) => {
   return {
     found: true,
     entityType: 'LOT',
+    lot_number: lot.lot_number,
     title: lot.item?.name || lot.sku,
     subtitle: lot.lot_number,
     primary: `${Number(lot.qty || 0)} ${uom} in ${lot.bin?.bin_code || 'unassigned bin'}`,
@@ -561,6 +564,7 @@ const resolveBinDisplay = async (parsed) => {
   return {
     found: true,
     entityType: 'BIN',
+    bin_code: bin.bin_code,
     title: `Bin ${bin.bin_code}`,
     subtitle: bin.zone || 'Storage location',
     primary: `${totalQty} pcs stored`,
@@ -1125,7 +1129,9 @@ router.post(
         limitedCandidates.map((candidate) => resolveCandidateDisplay(candidate))
       )
       const candidatesWithFeedback = await attachFeedbackSignals(resolvedCandidates, operationContext)
+      const rankingStartedAt = process.hrtime.bigint()
       const mlRanking = enrichCandidatesWithMlScores(candidatesWithFeedback, operationContext)
+      mlRanking.model.inference_elapsed_ms = Number(process.hrtime.bigint() - rankingStartedAt) / 1e6
 
       res.json({
         success: true,
@@ -1149,6 +1155,32 @@ router.post(
   async (req, res) => {
     try {
       const body = req.body || {}
+      if (body.decision_id) {
+        const candidates = Array.isArray(body.candidates) ? body.candidates : []
+        const result = await recordCandidateDecision({
+          model: ScannerSelectionSample,
+          body: { ...body, candidates },
+          request: {
+            userId: req.user?.id,
+            userName: req.user?.username || req.user?.email,
+            userAgent: req.headers['user-agent'],
+            ipAddress: getRequestIp(req)
+          }
+        })
+        res.json({
+          success: true,
+          message: 'Candidate decision recorded.',
+          idempotent_replay: result.replayed,
+          decision_type: result.decision_type,
+          selected_candidate_id: result.selected_candidate_id,
+          persistence_status: result.persistence_status,
+          snapshot_status: result.snapshot_status,
+          training_eligible: result.training_eligible,
+          server_received_at: result.server_received_at
+        })
+        return
+      }
+
       const candidates = Array.isArray(body.candidates) ? body.candidates.slice(0, 12) : []
       const selectedCandidateId = body.selected_candidate_id ? String(body.selected_candidate_id).slice(0, 80) : null
       const selectedCandidate = candidates.find((candidate) => String(candidate.candidate_id || '') === selectedCandidateId)
@@ -1200,13 +1232,16 @@ router.post(
         training_data_recorded: true
       })
     } catch (error) {
-      res.status(500).json({
+      res.status(error.statusCode || 500).json({
         success: false,
         message: 'Failed to record scanner selection feedback',
-        error: error.message
+        error: error.message,
+        code: error.code || null,
+        ...(error.details || {})
       })
     }
   }
 )
 
 module.exports = router
+module.exports.resolveCandidateDisplay = resolveCandidateDisplay

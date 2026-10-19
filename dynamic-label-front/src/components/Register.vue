@@ -9,7 +9,7 @@
 
       <!-- 主标题 -->
       <h2 class="welcome-title">Create your account</h2>
-      <p class="welcome-subtitle">Set up your account to continue</p>
+      <p class="welcome-subtitle">Create a customer account to browse the office shop</p>
 
       <!-- 注册表单 -->
       <form @submit.prevent="handleRegister" class="register-form">
@@ -82,8 +82,9 @@
       <div class="signin-section">
         <p class="signin-text">
           Already have an account? 
-          <router-link to="/login" class="signin-link">Sign in</router-link>
+          <router-link :to="{ path: '/login', query: { redirect: '/shop' } }" class="signin-link">Sign in</router-link>
         </p>
+        <p class="signin-text staff-note">Staff accounts are enabled by an administrator after registration.</p>
       </div>
     </div>
   </div>
@@ -136,11 +137,11 @@ export default {
           password: password.value
         })
         
-        success.value = 'Account created successfully. Redirecting to sign in...'
+        success.value = 'Account created. Redirecting to sign in, then the shop...'
         
         // 延迟跳转
         setTimeout(() => {
-          router.push('/')
+          router.push({ path: '/login', query: { redirect: '/shop' } })
         }, 2000)
         
       } catch (e) {
@@ -315,6 +316,8 @@ export default {
 .signin-section {
   margin-bottom: 24px;
 }
+
+.staff-note { margin-top: 8px; font-size: 12px; opacity: 0.75; }
 
 .signin-text {
   color: #6b7280;

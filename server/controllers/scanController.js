@@ -542,6 +542,23 @@ const summarizeScenarioTags = (rows) => {
     .sort((a, b) => b.total - a.total)
 }
 
+const percentile = (values, quantile) => {
+  const sorted = values
+    .map((value) => Number(value))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)
+
+  if (!sorted.length) return null
+
+  const position = (sorted.length - 1) * quantile
+  const lowerIndex = Math.floor(position)
+  const upperIndex = Math.ceil(position)
+  const lower = sorted[lowerIndex]
+  const upper = sorted[upperIndex]
+
+  return Math.round(lower + ((upper - lower) * (position - lowerIndex)))
+}
+
 const getScannerBenchmarkSummary = async (req, res) => {
   try {
     const days = Math.min(Math.max(Number(req.query.days || 14), 1), 90)
@@ -561,6 +578,7 @@ const getScannerBenchmarkSummary = async (req, res) => {
     const successfulRows = plainRows.filter((row) => row.status === 'success')
     const lockRows = successfulRows.filter((row) => Number.isFinite(Number(row.lock_ms)))
     const firstFrameRows = plainRows.filter((row) => Number.isFinite(Number(row.first_frame_ms)))
+    const lockValues = lockRows.map((row) => Number(row.lock_ms))
     const totalLockMs = lockRows.reduce((sum, row) => sum + Number(row.lock_ms), 0)
     const totalFirstFrameMs = firstFrameRows.reduce((sum, row) => sum + Number(row.first_frame_ms), 0)
 
@@ -571,7 +589,10 @@ const getScannerBenchmarkSummary = async (req, res) => {
         total: plainRows.length,
         success: successfulRows.length,
         successRate: plainRows.length ? successfulRows.length / plainRows.length : 0,
+        lockSampleCount: lockRows.length,
         avgLockMs: lockRows.length ? Math.round(totalLockMs / lockRows.length) : null,
+        medianLockMs: percentile(lockValues, 0.5),
+        p95LockMs: percentile(lockValues, 0.95),
         avgFirstFrameMs: firstFrameRows.length ? Math.round(totalFirstFrameMs / firstFrameRows.length) : null,
         byLabelType: summarizeBy(plainRows, 'label_type'),
         byMode: summarizeBy(plainRows, 'mode'),
@@ -925,7 +946,8 @@ const executeInbound = async (req, res) => {
     // 创建或更新批次
     let lot = await Lot.findOne({
       where: { lot_number, sku },
-      transaction
+      transaction,
+      lock: true
     })
     const normalizedExpiryDate = expiry_date ? new Date(expiry_date) : null
 
@@ -960,6 +982,7 @@ const executeInbound = async (req, res) => {
     // 更新数量
     await lot.update({
       qty: lot.qty + parsedQty,
+      version: (lot.version || 0) + 1,
       ...(bin ? { bin_id: bin.id } : {}),
       ...(normalizedExpiryDate ? { expiry_date: normalizedExpiryDate } : {})
     }, { transaction })
@@ -1332,6 +1355,7 @@ const executeMove = async (req, res) => {
 
       await sourceLot.update({
         qty: availableQty - moveQty,
+        version: (sourceLot.version || 0) + 1,
         updated_by: userId
       }, { transaction })
 
@@ -1355,6 +1379,7 @@ const executeMove = async (req, res) => {
     } else {
       await sourceLot.update({
         bin_id: targetBin.id,
+        version: (sourceLot.version || 0) + 1,
         updated_by: userId
       }, { transaction })
     }

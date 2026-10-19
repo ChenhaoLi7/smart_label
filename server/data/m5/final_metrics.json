@@ -1,0 +1,664 @@
+{
+  "metrics": {
+    "seasonal": {
+      "mae": 1.8142857142857143,
+      "wape": 1.0348339784070075,
+      "seven_day_total_mae": 6.51
+    },
+    "mean28": {
+      "mae": 1.428252548415746,
+      "wape": 0.8146480210967791,
+      "seven_day_total_mae": 5.466874985285103
+    },
+    "lightgbm": {
+      "mae": 1.4172523872745453,
+      "wape": 0.8083737389221282,
+      "seven_day_total_mae": 5.489888751193932
+    }
+  },
+  "inventory": {
+    "skus": 100,
+    "train_rows": 188300,
+    "test_rows": 2800,
+    "origins": [
+      1913,
+      1920,
+      1927,
+      1934
+    ],
+    "test_dates": [
+      "2016-04-25",
+      "2016-05-22"
+    ],
+    "feature_seconds": 1.9860682500293478,
+    "fit_seconds": 0.45990362495649606,
+    "batch_predict_seconds": 0.8516936249798164,
+    "total_seconds": 3.3773275420535356,
+    "lightgbm": "4.7.0",
+    "python": "3.13.3"
+  },
+  "pairwise_sku_mae": {
+    "lightgbm_vs_mean28": {
+      "better": 51,
+      "worse": 49,
+      "tie": 0
+    },
+    "mean28_vs_lightgbm": {
+      "better": 49,
+      "worse": 51,
+      "tie": 0
+    },
+    "lightgbm_vs_seasonal": {
+      "better": 78,
+      "worse": 22,
+      "tie": 0
+    },
+    "mean28_vs_seasonal": {
+      "better": 80,
+      "worse": 19,
+      "tie": 1
+    }
+  },
+  "method_by_sku": {
+    "FOODS_1_001": {
+      "seasonal_mae": 1.3928571428571428,
+      "mean28_mae": 1.0892857100282396,
+      "lightgbm_mae": 1.054937833178153,
+      "best": "lightgbm"
+    },
+    "FOODS_1_002": {
+      "seasonal_mae": 0.9285714285714286,
+      "mean28_mae": 0.6505102004323687,
+      "lightgbm_mae": 0.6335767262500258,
+      "best": "lightgbm"
+    },
+    "FOODS_1_003": {
+      "seasonal_mae": 0.75,
+      "mean28_mae": 0.9056122388158526,
+      "lightgbm_mae": 0.9115248388874431,
+      "best": "seasonal"
+    },
+    "FOODS_1_004": {
+      "seasonal_mae": 3.25,
+      "mean28_mae": 2.6313775522368297,
+      "lightgbm_mae": 2.2267080826519945,
+      "best": "lightgbm"
+    },
+    "FOODS_1_005": {
+      "seasonal_mae": 1.8928571428571428,
+      "mean28_mae": 1.4681122601032257,
+      "lightgbm_mae": 1.4734240740811895,
+      "best": "mean28"
+    },
+    "FOODS_1_006": {
+      "seasonal_mae": 2.25,
+      "mean28_mae": 1.5867346908364977,
+      "lightgbm_mae": 1.6013868398821107,
+      "best": "mean28"
+    },
+    "FOODS_1_008": {
+      "seasonal_mae": 0.42857142857142855,
+      "mean28_mae": 0.32142857435558525,
+      "lightgbm_mae": 0.4364875429629606,
+      "best": "mean28"
+    },
+    "FOODS_1_009": {
+      "seasonal_mae": 1.6428571428571428,
+      "mean28_mae": 1.2334183699318342,
+      "lightgbm_mae": 1.1600591722969251,
+      "best": "lightgbm"
+    },
+    "FOODS_1_010": {
+      "seasonal_mae": 0.2857142857142857,
+      "mean28_mae": 0.3494897971728018,
+      "lightgbm_mae": 0.429843932775544,
+      "best": "seasonal"
+    },
+    "FOODS_1_011": {
+      "seasonal_mae": 1.1428571428571428,
+      "mean28_mae": 0.8915816311325345,
+      "lightgbm_mae": 0.8908221773453503,
+      "best": "lightgbm"
+    },
+    "FOODS_1_012": {
+      "seasonal_mae": 2.5,
+      "mean28_mae": 1.8979591982705253,
+      "lightgbm_mae": 2.0542450960944567,
+      "best": "mean28"
+    },
+    "FOODS_1_013": {
+      "seasonal_mae": 2.0357142857142856,
+      "mean28_mae": 1.7270408145018987,
+      "lightgbm_mae": 1.6237493007666615,
+      "best": "lightgbm"
+    },
+    "FOODS_1_014": {
+      "seasonal_mae": 1.9285714285714286,
+      "mean28_mae": 1.4400510362216405,
+      "lightgbm_mae": 1.4128747148473833,
+      "best": "lightgbm"
+    },
+    "FOODS_1_015": {
+      "seasonal_mae": 1.5,
+      "mean28_mae": 1.3469387761184148,
+      "lightgbm_mae": 1.3556787290255536,
+      "best": "mean28"
+    },
+    "FOODS_1_016": {
+      "seasonal_mae": 1.1071428571428572,
+      "mean28_mae": 0.7946428571428571,
+      "lightgbm_mae": 0.8320190058923392,
+      "best": "mean28"
+    },
+    "FOODS_1_017": {
+      "seasonal_mae": 1.3571428571428572,
+      "mean28_mae": 1.088010189788682,
+      "lightgbm_mae": 1.0962052905366457,
+      "best": "mean28"
+    },
+    "FOODS_1_018": {
+      "seasonal_mae": 7.75,
+      "mean28_mae": 4.262755070413862,
+      "lightgbm_mae": 4.860222201029353,
+      "best": "mean28"
+    },
+    "FOODS_1_019": {
+      "seasonal_mae": 7.142857142857143,
+      "mean28_mae": 6.367346984999521,
+      "lightgbm_mae": 6.466444756575941,
+      "best": "mean28"
+    },
+    "FOODS_1_020": {
+      "seasonal_mae": 1.4285714285714286,
+      "mean28_mae": 1.158163262265069,
+      "lightgbm_mae": 1.136021059911647,
+      "best": "lightgbm"
+    },
+    "FOODS_1_021": {
+      "seasonal_mae": 0.9285714285714286,
+      "mean28_mae": 1.0446428592715944,
+      "lightgbm_mae": 1.0068938704979522,
+      "best": "seasonal"
+    },
+    "FOODS_1_022": {
+      "seasonal_mae": 0.14285714285714285,
+      "mean28_mae": 0.1938775535672903,
+      "lightgbm_mae": 0.32145798724433444,
+      "best": "seasonal"
+    },
+    "FOODS_1_023": {
+      "seasonal_mae": 2.5357142857142856,
+      "mean28_mae": 1.7500000010643686,
+      "lightgbm_mae": 1.690465371569266,
+      "best": "lightgbm"
+    },
+    "FOODS_1_024": {
+      "seasonal_mae": 0.9285714285714286,
+      "mean28_mae": 0.7640306122068848,
+      "lightgbm_mae": 0.7741634223591216,
+      "best": "mean28"
+    },
+    "FOODS_1_025": {
+      "seasonal_mae": 0.8571428571428571,
+      "mean28_mae": 0.6607142793280738,
+      "lightgbm_mae": 0.6909405201600757,
+      "best": "mean28"
+    },
+    "FOODS_1_026": {
+      "seasonal_mae": 1.1428571428571428,
+      "mean28_mae": 0.7602040959256036,
+      "lightgbm_mae": 0.7657374977139259,
+      "best": "mean28"
+    },
+    "FOODS_1_027": {
+      "seasonal_mae": 1.8214285714285714,
+      "mean28_mae": 1.3992346738065993,
+      "lightgbm_mae": 1.3247058482730947,
+      "best": "lightgbm"
+    },
+    "FOODS_1_028": {
+      "seasonal_mae": 1.8571428571428572,
+      "mean28_mae": 1.7946428592715944,
+      "lightgbm_mae": 1.7672428383482772,
+      "best": "lightgbm"
+    },
+    "FOODS_1_029": {
+      "seasonal_mae": 0.6428571428571429,
+      "mean28_mae": 0.5127551002161843,
+      "lightgbm_mae": 0.5444570614706639,
+      "best": "mean28"
+    },
+    "FOODS_1_030": {
+      "seasonal_mae": 1.0357142857142858,
+      "mean28_mae": 0.7831632431064334,
+      "lightgbm_mae": 0.7765194346228609,
+      "best": "lightgbm"
+    },
+    "FOODS_1_031": {
+      "seasonal_mae": 2.107142857142857,
+      "mean28_mae": 1.3571428592715944,
+      "lightgbm_mae": 1.3945387335666548,
+      "best": "mean28"
+    },
+    "FOODS_1_032": {
+      "seasonal_mae": 3.0,
+      "mean28_mae": 2.661989791052682,
+      "lightgbm_mae": 2.468415499988869,
+      "best": "lightgbm"
+    },
+    "FOODS_1_033": {
+      "seasonal_mae": 0.32142857142857145,
+      "mean28_mae": 0.5841836780309677,
+      "lightgbm_mae": 0.5262639837771225,
+      "best": "seasonal"
+    },
+    "FOODS_1_034": {
+      "seasonal_mae": 0.5,
+      "mean28_mae": 0.4795918347580092,
+      "lightgbm_mae": 0.5389209050156848,
+      "best": "mean28"
+    },
+    "FOODS_1_035": {
+      "seasonal_mae": 1.4285714285714286,
+      "mean28_mae": 1.4298469424247742,
+      "lightgbm_mae": 1.494093251571296,
+      "best": "seasonal"
+    },
+    "FOODS_1_036": {
+      "seasonal_mae": 1.9285714285714286,
+      "mean28_mae": 1.3048469424247742,
+      "lightgbm_mae": 1.3190172528384922,
+      "best": "mean28"
+    },
+    "FOODS_1_037": {
+      "seasonal_mae": 1.6071428571428572,
+      "mean28_mae": 1.2181122515882765,
+      "lightgbm_mae": 1.1879078780085386,
+      "best": "lightgbm"
+    },
+    "FOODS_1_038": {
+      "seasonal_mae": 0.8214285714285714,
+      "mean28_mae": 0.6007653027772903,
+      "lightgbm_mae": 0.5711375608487395,
+      "best": "lightgbm"
+    },
+    "FOODS_1_039": {
+      "seasonal_mae": 0.5,
+      "mean28_mae": 0.549744898719447,
+      "lightgbm_mae": 0.5593241389219166,
+      "best": "seasonal"
+    },
+    "FOODS_1_040": {
+      "seasonal_mae": 2.2857142857142856,
+      "mean28_mae": 1.8367346780640739,
+      "lightgbm_mae": 1.8421226540358138,
+      "best": "mean28"
+    },
+    "FOODS_1_041": {
+      "seasonal_mae": 1.1071428571428572,
+      "mean28_mae": 0.8061224435056958,
+      "lightgbm_mae": 0.7581590617913105,
+      "best": "lightgbm"
+    },
+    "FOODS_1_042": {
+      "seasonal_mae": 3.642857142857143,
+      "mean28_mae": 2.4477040767669678,
+      "lightgbm_mae": 2.290069796397254,
+      "best": "lightgbm"
+    },
+    "FOODS_1_043": {
+      "seasonal_mae": 5.821428571428571,
+      "mean28_mae": 5.681122473308018,
+      "lightgbm_mae": 4.4923253506491125,
+      "best": "lightgbm"
+    },
+    "FOODS_1_044": {
+      "seasonal_mae": 1.9642857142857142,
+      "mean28_mae": 1.727040831531797,
+      "lightgbm_mae": 1.5626506926825845,
+      "best": "lightgbm"
+    },
+    "FOODS_1_045": {
+      "seasonal_mae": 2.9285714285714284,
+      "mean28_mae": 1.7563775650092535,
+      "lightgbm_mae": 1.8719104401461908,
+      "best": "mean28"
+    },
+    "FOODS_1_046": {
+      "seasonal_mae": 4.607142857142857,
+      "mean28_mae": 3.1403060810906545,
+      "lightgbm_mae": 3.405381676006645,
+      "best": "mean28"
+    },
+    "FOODS_1_047": {
+      "seasonal_mae": 1.3928571428571428,
+      "mean28_mae": 1.294642863529069,
+      "lightgbm_mae": 1.292537519885338,
+      "best": "lightgbm"
+    },
+    "FOODS_1_048": {
+      "seasonal_mae": 1.0357142857142858,
+      "mean28_mae": 0.7959183667387281,
+      "lightgbm_mae": 0.793277811143949,
+      "best": "lightgbm"
+    },
+    "FOODS_1_049": {
+      "seasonal_mae": 1.9285714285714286,
+      "mean28_mae": 1.373724496790341,
+      "lightgbm_mae": 1.3670239892056897,
+      "best": "lightgbm"
+    },
+    "FOODS_1_050": {
+      "seasonal_mae": 1.0,
+      "mean28_mae": 1.0650510213204794,
+      "lightgbm_mae": 1.046014707379361,
+      "best": "seasonal"
+    },
+    "FOODS_1_051": {
+      "seasonal_mae": 1.3214285714285714,
+      "mean28_mae": 0.908163268651281,
+      "lightgbm_mae": 0.9214979505148302,
+      "best": "mean28"
+    },
+    "FOODS_1_052": {
+      "seasonal_mae": 1.9285714285714286,
+      "mean28_mae": 1.6071428528853826,
+      "lightgbm_mae": 1.539230675603886,
+      "best": "lightgbm"
+    },
+    "FOODS_1_053": {
+      "seasonal_mae": 0.25,
+      "mean28_mae": 0.27678571614835945,
+      "lightgbm_mae": 0.34988716589187996,
+      "best": "seasonal"
+    },
+    "FOODS_1_054": {
+      "seasonal_mae": 2.892857142857143,
+      "mean28_mae": 1.825255104473659,
+      "lightgbm_mae": 1.8455977484996564,
+      "best": "mean28"
+    },
+    "FOODS_1_055": {
+      "seasonal_mae": 5.535714285714286,
+      "mean28_mae": 3.72576527936118,
+      "lightgbm_mae": 3.7791178994242194,
+      "best": "mean28"
+    },
+    "FOODS_1_056": {
+      "seasonal_mae": 1.2857142857142858,
+      "mean28_mae": 1.119897956294673,
+      "lightgbm_mae": 1.0188429531368846,
+      "best": "lightgbm"
+    },
+    "FOODS_1_057": {
+      "seasonal_mae": 1.8928571428571428,
+      "mean28_mae": 1.5,
+      "lightgbm_mae": 1.363370455492319,
+      "best": "lightgbm"
+    },
+    "FOODS_1_058": {
+      "seasonal_mae": 1.8571428571428572,
+      "mean28_mae": 2.057397948311908,
+      "lightgbm_mae": 1.721616415546997,
+      "best": "lightgbm"
+    },
+    "FOODS_1_059": {
+      "seasonal_mae": 0.35714285714285715,
+      "mean28_mae": 0.6670918451356036,
+      "lightgbm_mae": 0.6546914542758779,
+      "best": "seasonal"
+    },
+    "FOODS_1_060": {
+      "seasonal_mae": 1.1428571428571428,
+      "mean28_mae": 0.7576530469315392,
+      "lightgbm_mae": 0.7552764316236654,
+      "best": "lightgbm"
+    },
+    "FOODS_1_061": {
+      "seasonal_mae": 1.2857142857142858,
+      "mean28_mae": 0.9604591769831521,
+      "lightgbm_mae": 0.9536357202122022,
+      "best": "lightgbm"
+    },
+    "FOODS_1_062": {
+      "seasonal_mae": 2.2857142857142856,
+      "mean28_mae": 1.4897959062031336,
+      "lightgbm_mae": 1.4742742796431794,
+      "best": "lightgbm"
+    },
+    "FOODS_1_063": {
+      "seasonal_mae": 1.6428571428571428,
+      "mean28_mae": 1.1772959125893456,
+      "lightgbm_mae": 1.2170482455339955,
+      "best": "mean28"
+    },
+    "FOODS_1_064": {
+      "seasonal_mae": 0.8214285714285714,
+      "mean28_mae": 0.8762755117246083,
+      "lightgbm_mae": 0.8234100655608015,
+      "best": "seasonal"
+    },
+    "FOODS_1_065": {
+      "seasonal_mae": 1.1071428571428572,
+      "mean28_mae": 0.7614795906203133,
+      "lightgbm_mae": 0.7340465958273255,
+      "best": "lightgbm"
+    },
+    "FOODS_1_066": {
+      "seasonal_mae": 2.392857142857143,
+      "mean28_mae": 1.9030612196241106,
+      "lightgbm_mae": 1.948844499330572,
+      "best": "mean28"
+    },
+    "FOODS_1_067": {
+      "seasonal_mae": 3.892857142857143,
+      "mean28_mae": 2.5127551215035573,
+      "lightgbm_mae": 2.6887553810018523,
+      "best": "mean28"
+    },
+    "FOODS_1_068": {
+      "seasonal_mae": 0.32142857142857145,
+      "mean28_mae": 0.27295918789293083,
+      "lightgbm_mae": 0.4049669564872645,
+      "best": "mean28"
+    },
+    "FOODS_1_069": {
+      "seasonal_mae": 2.3214285714285716,
+      "mean28_mae": 1.8469387888908386,
+      "lightgbm_mae": 1.7941663958972511,
+      "best": "lightgbm"
+    },
+    "FOODS_1_070": {
+      "seasonal_mae": 1.5357142857142858,
+      "mean28_mae": 1.3494897825377328,
+      "lightgbm_mae": 1.3575495679616,
+      "best": "mean28"
+    },
+    "FOODS_1_071": {
+      "seasonal_mae": 1.6785714285714286,
+      "mean28_mae": 1.2959183582237788,
+      "lightgbm_mae": 1.2920017908783694,
+      "best": "lightgbm"
+    },
+    "FOODS_1_072": {
+      "seasonal_mae": 0.6071428571428571,
+      "mean28_mae": 0.39923469589224886,
+      "lightgbm_mae": 0.5184791210119769,
+      "best": "mean28"
+    },
+    "FOODS_1_073": {
+      "seasonal_mae": 1.3571428571428572,
+      "mean28_mae": 1.085459174854415,
+      "lightgbm_mae": 1.0777723716927858,
+      "best": "lightgbm"
+    },
+    "FOODS_1_074": {
+      "seasonal_mae": 1.5,
+      "mean28_mae": 0.9999999914850507,
+      "lightgbm_mae": 1.0346961281293825,
+      "best": "mean28"
+    },
+    "FOODS_1_075": {
+      "seasonal_mae": 0.6071428571428571,
+      "mean28_mae": 0.6823979616165161,
+      "lightgbm_mae": 0.6740209428887931,
+      "best": "seasonal"
+    },
+    "FOODS_1_076": {
+      "seasonal_mae": 1.2142857142857142,
+      "mean28_mae": 0.9591836759022304,
+      "lightgbm_mae": 0.9552776085523748,
+      "best": "lightgbm"
+    },
+    "FOODS_1_077": {
+      "seasonal_mae": 0.5714285714285714,
+      "mean28_mae": 0.4668367361383779,
+      "lightgbm_mae": 0.534903591024079,
+      "best": "mean28"
+    },
+    "FOODS_1_078": {
+      "seasonal_mae": 0.75,
+      "mean28_mae": 0.761479588491576,
+      "lightgbm_mae": 0.7779507370379283,
+      "best": "seasonal"
+    },
+    "FOODS_1_079": {
+      "seasonal_mae": 0.0,
+      "mean28_mae": 0.0,
+      "lightgbm_mae": 0.04829973385897485,
+      "best": "seasonal"
+    },
+    "FOODS_1_080": {
+      "seasonal_mae": 1.1428571428571428,
+      "mean28_mae": 1.0829081641776221,
+      "lightgbm_mae": 1.0159572511384158,
+      "best": "lightgbm"
+    },
+    "FOODS_1_081": {
+      "seasonal_mae": 1.75,
+      "mean28_mae": 1.3992347121238708,
+      "lightgbm_mae": 1.4060932753944668,
+      "best": "mean28"
+    },
+    "FOODS_1_082": {
+      "seasonal_mae": 3.4642857142857144,
+      "mean28_mae": 3.151785680225917,
+      "lightgbm_mae": 3.029016314232797,
+      "best": "lightgbm"
+    },
+    "FOODS_1_083": {
+      "seasonal_mae": 1.8928571428571428,
+      "mean28_mae": 1.6709183646099908,
+      "lightgbm_mae": 1.665038648951537,
+      "best": "lightgbm"
+    },
+    "FOODS_1_084": {
+      "seasonal_mae": 0.14285714285714285,
+      "mean28_mae": 0.12500000239482947,
+      "lightgbm_mae": 0.222188625784458,
+      "best": "mean28"
+    },
+    "FOODS_1_085": {
+      "seasonal_mae": 5.928571428571429,
+      "mean28_mae": 4.0982142346245904,
+      "lightgbm_mae": 3.8040621936349543,
+      "best": "lightgbm"
+    },
+    "FOODS_1_086": {
+      "seasonal_mae": 5.535714285714286,
+      "mean28_mae": 4.1862244095121115,
+      "lightgbm_mae": 4.1202048075203965,
+      "best": "lightgbm"
+    },
+    "FOODS_1_087": {
+      "seasonal_mae": 2.7142857142857144,
+      "mean28_mae": 1.7295918294361659,
+      "lightgbm_mae": 1.709419038959451,
+      "best": "lightgbm"
+    },
+    "FOODS_1_088": {
+      "seasonal_mae": 4.571428571428571,
+      "mean28_mae": 4.033163270780018,
+      "lightgbm_mae": 4.051761285888941,
+      "best": "mean28"
+    },
+    "FOODS_1_089": {
+      "seasonal_mae": 1.25,
+      "mean28_mae": 0.8852040810244424,
+      "lightgbm_mae": 0.9047336380176363,
+      "best": "mean28"
+    },
+    "FOODS_1_090": {
+      "seasonal_mae": 0.6428571428571429,
+      "mean28_mae": 0.682397968002728,
+      "lightgbm_mae": 0.6226259479247808,
+      "best": "lightgbm"
+    },
+    "FOODS_1_091": {
+      "seasonal_mae": 2.4642857142857144,
+      "mean28_mae": 1.9260204104440553,
+      "lightgbm_mae": 1.787699143121774,
+      "best": "lightgbm"
+    },
+    "FOODS_1_092": {
+      "seasonal_mae": 1.0,
+      "mean28_mae": 0.841836718576295,
+      "lightgbm_mae": 0.8246889092432842,
+      "best": "lightgbm"
+    },
+    "FOODS_1_093": {
+      "seasonal_mae": 0.10714285714285714,
+      "mean28_mae": 0.20790816497589862,
+      "lightgbm_mae": 0.24502560872573323,
+      "best": "seasonal"
+    },
+    "FOODS_1_094": {
+      "seasonal_mae": 1.6428571428571428,
+      "mean28_mae": 1.1607142899717604,
+      "lightgbm_mae": 1.1408667207382766,
+      "best": "lightgbm"
+    },
+    "FOODS_1_095": {
+      "seasonal_mae": 0.0,
+      "mean28_mae": 0.0357142873108387,
+      "lightgbm_mae": 0.10554583376950329,
+      "best": "seasonal"
+    },
+    "FOODS_1_096": {
+      "seasonal_mae": 0.6428571428571429,
+      "mean28_mae": 0.7028061215366636,
+      "lightgbm_mae": 0.7004006161726422,
+      "best": "seasonal"
+    },
+    "FOODS_1_097": {
+      "seasonal_mae": 1.75,
+      "mean28_mae": 1.3227040725094932,
+      "lightgbm_mae": 1.3249611842715858,
+      "best": "mean28"
+    },
+    "FOODS_1_098": {
+      "seasonal_mae": 0.14285714285714285,
+      "mean28_mae": 0.18112245255282947,
+      "lightgbm_mae": 0.2527375507892961,
+      "best": "seasonal"
+    },
+    "FOODS_1_099": {
+      "seasonal_mae": 4.928571428571429,
+      "mean28_mae": 4.133928520338876,
+      "lightgbm_mae": 4.327182906976741,
+      "best": "mean28"
+    },
+    "FOODS_1_101": {
+      "seasonal_mae": 1.1785714285714286,
+      "mean28_mae": 0.915816321436848,
+      "lightgbm_mae": 0.9277428270399249,
+      "best": "mean28"
+    },
+    "FOODS_1_102": {
+      "seasonal_mae": 1.6428571428571428,
+      "mean28_mae": 1.121173474405493,
+      "lightgbm_mae": 1.1781493855052065,
+      "best": "mean28"
+    }
+  }
+}

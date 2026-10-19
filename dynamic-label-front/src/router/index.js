@@ -14,8 +14,18 @@ import AiAssistant from '../components/AiAssistant.vue'
 import SuggestionCenter from '../components/SuggestionCenter.vue'
 import UserAccessManagement from '../components/UserAccessManagement.vue'
 import ScannerPerformance from '../components/ScannerPerformance.vue'
+import RankingDataset from '../components/RankingDataset.vue'
+import InventoryAnalytics from '../components/InventoryAnalytics.vue'
+import RecoveryBenchmark from '../components/RecoveryBenchmark.vue'
+import SkuForecast from '../components/SkuForecast.vue'
+import Shop from '../components/Shop.vue'
+import ShopTabs from '../components/ShopTabs.vue'
 
 const routes = [
+  { path:'/candidate-recommendation', name:'CandidateRecommendation', component:AdvancedScanner },
+  { path:'/sku-forecast', name:'SkuForecast', component:SkuForecast },
+  { path:'/shop', name:'Shop', component:Shop },
+  { path:'/shop-tabs', name:'ShopTabs', component:ShopTabs },
   {
     path: '/',
     redirect: '/login'
@@ -61,6 +71,21 @@ const routes = [
     component: ScannerPerformance
   },
   {
+    path: '/recovery-benchmark',
+    name: 'RecoveryBenchmark',
+    component: RecoveryBenchmark
+  },
+  {
+    path: '/ranking-dataset',
+    name: 'RankingDataset',
+    component: RankingDataset
+  },
+  {
+    path: '/inventory-analytics',
+    name: 'InventoryAnalytics',
+    component: InventoryAnalytics
+  },
+  {
     path: '/advanced-scan',
     name: 'AdvancedScanner',
     component: AdvancedScanner
@@ -103,14 +128,30 @@ const router = createRouter({
 
 const blockedRoutes = ['/label-design', '/purchase-management', '/sales-management', '/production-management']
 
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const token = localStorage.getItem('token')
   const role = localStorage.getItem('userRole') || 'operator'
   const publicPages = ['/login', '/register', '/forgot-password']
   if (!publicPages.includes(to.path) && !token) {
-    return next('/login')
+    return next(to.path === '/shop' ? { path: '/login', query: { redirect: '/shop' } } : '/login')
   }
 
+  // 顾客（viewer）只能使用商店；后端接口同样按角色拒绝
+  if (token && role === 'viewer' && !publicPages.includes(to.path) && to.path !== '/shop') {
+    return next('/shop')
+  }
+
+  if (['/candidate-recommendation','/sku-forecast','/shop-tabs'].includes(to.path)) {
+    try {
+      const response = await fetch('/api/auth/profile',{ headers:{ Authorization:`Bearer ${token}` },cache:'no-store' })
+      const payload = await response.json()
+      const verifiedRole = payload?.data?.user?.role
+      if (!response.ok) return next('/login')
+      const allowed = to.path === '/sku-forecast' ? ['admin'] : ['admin','operator']
+      if (!allowed.includes(verifiedRole)) return next('/dashboard')
+      return next()
+    } catch (_error) { return next('/login') }
+  }
   if (blockedRoutes.includes(to.path)) {
     return next('/dashboard')
   }
@@ -120,7 +161,7 @@ router.beforeEach((to, from, next) => {
   }
 
   // 对 operator 限制：允许进入扫码页和仪表盘(Dashboard)
-  if (role !== 'admin' && !publicPages.includes(to.path) && to.path !== '/advanced-scan' && to.path !== '/dashboard' && to.path !== '/suggestions') {
+  if (role !== 'admin' && !publicPages.includes(to.path) && to.path !== '/advanced-scan' && to.path !== '/dashboard' && to.path !== '/suggestions' && to.path !== '/shop' && to.path !== '/shop-tabs') {
     return next('/dashboard')
   }
 

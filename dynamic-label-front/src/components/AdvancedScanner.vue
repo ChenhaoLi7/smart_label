@@ -1,9 +1,23 @@
 <template>
-  <div class="scanner-container">
+  <div class="scanner-container" :class="{ 'personalization-page':isPersonalizationPage, 'camera-idle':isPersonalizationPage && !isScanning }">
+    <section v-if="isPersonalizationPage" class="personalization-context">
+      <strong>Target recommendation</strong>
+      <p>Task, label position and your previous choices help order the candidates. You always confirm the target.</p>
+      <label>Current operation
+        <select v-model="personalizationOperation" :disabled="isRoiAssistRunning || showMultiCodePicker" @change="handleSelectionTaskChange">
+          <option value="SCAN">Identify</option><option value="INBOUND">Stock in</option><option value="OUTBOUND">Stock out</option><option value="COUNT">Count</option><option value="MOVE">Move</option>
+        </select>
+      </label>
+      <label class="history-consent"><input v-model="personalizationConsent" type="checkbox" :disabled="isRoiAssistRunning || showMultiCodePicker">Use my choices to build recommendation history</label>
+      <p v-if="!personalizationConsent">Practice mode: choices are saved separately and do not build preference history.</p>
+      <p v-else>Choose according to your own goal. This records your choice and the displayed candidates; it does not change stock.</p>
+      <p v-if="personalizationNotice.text" class="decision-save-status personalization-notice" :data-status="personalizationNotice.status" role="status" data-testid="personalization-notice">{{ personalizationNotice.text }}</p>
+      <div v-if="selectedPersonalizedTarget" class="confirmed-target" data-testid="confirmed-target"><strong>Confirmed target: {{ selectedPersonalizedTarget.title }}</strong><p>{{ selectedPersonalizedTarget.detail }}</p><p>{{ selectedPersonalizedTarget.purpose }}</p></div>
+    </section>
     <!-- 扫码模式选择 -->
     <div class="scanner-header">
       <h2 class="scanner-title">Smart Scan System</h2>
-      <div class="mode-selector">
+      <div v-if="!isPersonalizationPage" class="mode-selector">
         <button 
           v-for="mode in scanModes" 
           :key="mode.value"
@@ -58,6 +72,20 @@
               <div class="corner bottom-right"></div>
             </div>
             <div
+              v-if="scanCapturePulse && scanCaptureTargetStyles.length"
+              class="scan-code-target-layer"
+              aria-hidden="true"
+            >
+              <div
+                v-for="target in scanCaptureTargetStyles"
+                :key="target.id"
+                class="scan-code-target"
+                :style="target.style"
+              >
+                <span class="scan-code-target-fill"></span>
+              </div>
+            </div>
+            <div
               v-if="scanCapturePulse && hasPositionedScanCapture"
               class="scan-code-lock"
               :style="scanCaptureOverlayStyle"
@@ -77,9 +105,46 @@
           </div>
         </div>
 
+        <div class="candidate-mode-panel" aria-label="Scanner selection mode">
+          <div class="candidate-mode-buttons">
+            <button
+              v-if="!isPersonalizationPage"
+              :class="['candidate-mode-btn', { active: scannerSelectionMode === 'quick' }]"
+              :disabled="Boolean(scanResult) || showMultiCodePicker || isConfirmingRoiDecision || isPersistingCandidateDecision || isRoiAssistRunning"
+              @click="setScannerSelectionMode('quick')"
+            >Quick Scan</button>
+            <button
+              :class="['candidate-mode-btn', { active: scannerSelectionMode === 'multi' }]"
+              :disabled="Boolean(scanResult) || showMultiCodePicker || isConfirmingRoiDecision || isPersistingCandidateDecision || isRoiAssistRunning"
+              @click="setScannerSelectionMode('multi')"
+            >Multi-code target</button>
+          </div>
+          <template v-if="scannerSelectionMode === 'multi'">
+            <label class="candidate-task-select">
+              <span>Task before capture</span>
+              <select v-model="selectionTaskContext" :disabled="Boolean(scanResult) || showMultiCodePicker || isConfirmingRoiDecision || isPersistingCandidateDecision || isRoiAssistRunning" @change="handleSelectionTaskChange">
+                <option value="general">General scan</option>
+                <option value="item">Find item</option>
+                <option value="lot">Find batch</option>
+                <option value="bin">Find location</option>
+              </select>
+            </label>
+            <button
+              class="control-btn multi-capture-btn"
+              :disabled="isRoiAssistRunning || !isScanning || hasInteractiveModalOpen || Boolean(scanResult)"
+              @click="triggerRoiAssist('manual')"
+            >{{ isRoiAssistRunning ? 'Identifying…' : 'Identify this frame' }}</button>
+            <template v-if="isPersonalizationPage">
+              <input ref="personalizationFrameInput" type="file" accept="image/jpeg,image/png,image/webp" class="sr-only" @change="handlePersonalizationFrameUpload">
+              <button class="control-btn" :disabled="isRoiAssistRunning || showMultiCodePicker" @click="personalizationFrameInput?.click()">Choose a scan image</button>
+            </template>
+            <p class="candidate-mode-hint">Hold the camera steady, choose the task first, then identify one frame. You will confirm the target before it is processed.</p>
+          </template>
+        </div>
+
         <!-- 摄像头控制 -->
         <div class="camera-controls">
-          <button @click="toggleCamera" class="control-btn">
+          <button @click="toggleCamera" class="control-btn" :disabled="isConfirmingRoiDecision || isPersistingCandidateDecision || showMultiCodePicker">
             {{ isScanning ? 'Stop Scan' : 'Retry Camera' }}
           </button>
           <button @click="switchCamera" class="control-btn" v-if="devices.length > 1">
@@ -90,6 +155,7 @@
             {{ flashOn ? 'Light Off' : 'Light On' }}
           </button>
           <button
+            v-if="scannerSelectionMode === 'quick'"
             @click="triggerRoiAssist('manual')"
             class="control-btn roi-assist-btn"
             :disabled="isRoiAssistRunning || !isScanning"
@@ -99,6 +165,15 @@
         </div>
         <div v-if="roiAssistStatus" class="roi-assist-status">
           {{ roiAssistStatus }}
+        </div>
+        <div v-if="candidateDecisionPersistenceMessage" class="decision-save-status" :data-status="candidateDecisionPersistenceStatus" aria-live="polite">
+          <span>{{ candidateDecisionPersistenceMessage }}</span>
+          <button
+            v-if="pendingCandidateDecisionRetries.length"
+            class="decision-save-retry"
+            :disabled="isRetryingCandidateDecision"
+            @click="retryCandidateDecisionSave(pendingCandidateDecisionRetries[0].decision_id)"
+          >{{ isRetryingCandidateDecision ? 'Retrying…' : 'Retry saving log' }}</button>
         </div>
 
       </div>
@@ -225,28 +300,35 @@
     <div v-if="showMultiCodePicker" class="multi-code-card">
       <div class="multi-code-header">
         <div>
-          <span class="multi-code-eyebrow">Context-aware selection</span>
-          <h3>Multiple codes found</h3>
-          <p>Please choose the target label for this warehouse action.</p>
+          <span class="multi-code-eyebrow">{{ currentCandidateDecision ? `${taskContextLabel(currentCandidateDecision.task_context)} · ${currentCandidateDecision.decision_id}` : 'ROI Assist candidates' }}</span>
+          <h3>{{ roiAssistCandidates.length ? (scannerSelectionMode === 'multi' ? 'Choose the target label' : 'Multiple codes found') : 'No decoded label found' }}</h3>
+          <p>{{ roiAssistCandidates.length ? (scannerSelectionMode === 'multi' ? 'All returned candidates are available. Select one, then confirm.' : 'Please choose the target label.') : 'This frame returned no decoded candidates. Record no target or close this decision.' }}</p>
         </div>
-        <button @click="dismissMultiCodePicker" class="multi-code-close" aria-label="Close multi-code picker">&times;</button>
+        <button @click="dismissMultiCodePicker" class="multi-code-close" aria-label="Close multi-code picker" :disabled="isConfirmingRoiDecision || isPersistingCandidateDecision || personalizationLocks.cancel">&times;</button>
       </div>
-      <div class="multi-code-list">
-        <button
+      <p v-if="currentCandidateDecision?.personalization_snapshot" class="multi-code-purpose" data-testid="frozen-purpose">{{ personalizationPurposeLabel(currentCandidateDecision.personalization_snapshot.collection_mode) }}</p>
+      <div v-if="currentCandidateDecision?.personalization_snapshot && personalizationNotice.text" class="decision-save-status" :data-status="personalizationNotice.status" role="alert" data-testid="picker-save-status">
+        <span>{{ personalizationNotice.text }}</span>
+        <button v-if="personalDecision.display === 'failed'" class="decision-save-retry" :disabled="personalDecision.busy" @click="retryPersonalizationDisplay">{{ personalDecision.busy ? 'Retrying…' : 'Retry recording the list' }}</button>
+      </div>
+      <p v-if="!roiAssistCandidates.length" class="multi-code-empty">Try another frame if the label is visible but could not be decoded.</p>
+      <div v-else class="multi-code-list">
+        <article
           v-for="candidate in roiAssistCandidates"
           :key="candidate.candidate_id || candidate.decoded_text"
-          :class="['multi-code-option', { recommended: candidate.selection_rank === 1 }]"
-          @click="selectRoiCandidate(candidate)"
+          :class="['multi-code-option', { recommended: candidate.selection_rank === 1, selected: pendingSelectedRoiCandidate?.candidate_id === candidate.candidate_id }]"
         >
           <span class="multi-code-type">{{ resolveRoiCandidateType(candidate) }}</span>
           <span v-if="candidate.selection_rank === 1" class="multi-code-recommendation">
-            Recommended
+            {{ isPersonalizationPage ? 'Suggested target' : scannerSelectionMode === 'multi' ? 'Rule suggestion' : 'Recommended' }}
           </span>
           <span class="multi-code-main">{{ formatRoiCandidateTitle(candidate) }}</span>
           <span class="multi-code-subtitle">{{ formatRoiCandidateSubtitle(candidate) }}</span>
           <span v-if="shouldShowRoiCandidateRaw(candidate)" class="multi-code-raw">
             {{ formatRoiCandidateRaw(candidate) }}
           </span>
+          <span v-if="candidate.personalization_feature" class="multi-code-selection-reason">{{ formatPersonalHistory(candidate) }}</span>
+          <span v-if="candidate.personalization_feature" class="multi-code-position" data-testid="candidate-position">{{ formatPersonalPosition(candidate) }}</span>
           <span class="multi-code-meta">{{ formatRoiCandidateMeta(candidate) }}</span>
           <span v-if="formatRoiCandidateSelectionReason(candidate)" class="multi-code-selection-reason">
             {{ formatRoiCandidateSelectionReason(candidate) }}
@@ -254,6 +336,22 @@
           <span v-if="formatRoiCandidatePrimary(candidate)" class="multi-code-primary">
             {{ formatRoiCandidatePrimary(candidate) }}
           </span>
+          <button class="multi-code-select-btn" :disabled="isPersistingCandidateDecision || isConfirmingRoiDecision || candidateDecisionPersistenceStatus === 'conflict' || personalizationLocks.select" @click="pendingSelectedRoiCandidate = candidate">
+            {{ pendingSelectedRoiCandidate?.candidate_id === candidate.candidate_id ? 'Selected' : 'Select this label' }}
+          </button>
+        </article>
+      </div>
+      <div class="multi-code-actions">
+        <button
+          class="action-btn action-btn-primary"
+          :disabled="!pendingSelectedRoiCandidate || isConfirmingRoiDecision || isPersistingCandidateDecision || candidateDecisionPersistenceStatus === 'conflict' || personalizationLocks.confirm"
+          @click="confirmRoiCandidateSelection"
+        >{{ isConfirmingRoiDecision ? 'Saving choice…' : personalDecision.attempt?.outcome === 'user_selected' ? 'Retry saving this choice' : 'Confirm selected label' }}</button>
+        <button class="action-btn action-btn-secondary" :disabled="isConfirmingRoiDecision || isPersistingCandidateDecision || personalizationLocks.noTarget" @click="recordRoiNoTarget">
+          {{ personalDecision.attempt?.outcome === 'user_no_target' ? 'Retry saving “no target”' : 'No target in this list' }}
+        </button>
+        <button class="action-btn action-btn-secondary" :disabled="isConfirmingRoiDecision || isPersistingCandidateDecision || personalizationLocks.cancel" @click="dismissMultiCodePicker">
+          {{ personalDecision.conflict ? 'Close' : personalDecision.attempt?.outcome === 'user_cancelled' ? 'Retry saving cancel' : 'Cancel' }}
         </button>
       </div>
     </div>
@@ -261,6 +359,7 @@
     <!-- 扫描结果 -->
     <div v-if="scanResult" class="scan-result">
       <h3>Scan Result</h3>
+      <p v-if="isFunctionalAcceptanceResult" class="decision-save-status" data-status="saved">Functional acceptance check: no inventory action will be enabled.</p>
       <div class="result-meta-pills">
         <span class="result-pill result-pill-live">Scanner Paused</span>
         <span v-if="scanAction" class="result-pill">{{ scanAction.replaceAll('_', ' ') }}</span>
@@ -279,12 +378,12 @@
       <!-- 业务操作按钮 -->
       <div class="business-actions business-actions-primary">
         <!-- 自动识别未入库商品时显示快速建档按钮 -->
-        <button v-if="isAdmin && scanAction === 'CREATE_ITEM'" @click="showCreateItemModal = true" class="action-btn action-btn-create">
+        <button v-if="isAdmin && scanAction === 'CREATE_ITEM'" :disabled="isFunctionalAcceptanceResult" @click="showCreateItemModal = true" class="action-btn action-btn-create">
           <span class="icon">➕</span>
           Fast Item Creation
         </button>
 
-        <button v-if="isAdmin" @click="handleInbound" class="action-btn action-btn-primary inbound">
+        <button v-if="isAdmin" :disabled="isFunctionalAcceptanceResult" @click="handleInbound" class="action-btn action-btn-primary inbound">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="7 10 12 15 17 10"/>
@@ -292,7 +391,7 @@
           </svg>
           Inbound Processing
         </button>
-        <button v-if="isAdmin" @click="handleMove" class="action-btn action-btn-dark">
+        <button v-if="isAdmin" :disabled="isFunctionalAcceptanceResult" @click="handleMove" class="action-btn action-btn-dark">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M16 3h5v5"/>
             <path d="M4 20L21 3"/>
@@ -302,7 +401,7 @@
           </svg>
           Move Bin
         </button>
-        <button @click="handleOutbound" class="action-btn action-btn-primary outbound">
+        <button :disabled="isFunctionalAcceptanceResult" @click="handleOutbound" class="action-btn action-btn-primary outbound">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="17 8 12 3 7 8"/>
@@ -666,7 +765,7 @@
 
 <script setup>
 import { computed, ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import {
   applyPreferredTrackConstraints,
   buildDecodeCandidatesFromVideo,
@@ -679,6 +778,61 @@ import {
 // import QRCode from 'qrcode' // 暂时注释，后续会用到
 
 const router = useRouter()
+const pageRoute = useRoute()
+const isPersonalizationPage = computed(() => pageRoute.path === '/candidate-recommendation')
+const personalizationConsent = ref(false)
+const personalizationOperation = ref('SCAN')
+const personalizationFrameInput = ref(null)
+const selectedPersonalizedTarget = ref(null)
+// Personalization save state lives in its own refs: the legacy decision object is not reactive.
+const personalizationNotice = ref({ status:'', text:'' })
+const personalDecision = ref({ decision_id:null, display:'none', attempt:null, conflict:false, busy:false })
+let personalizationAbort = null
+const personalizationPurposeLabel = mode => mode === 'natural_preference'
+  ? 'Natural choice: saved choices build your recommendation history. Not used to train a model.'
+  : 'Practice: saved separately; does not build preference history. Not used to train a model.'
+const setPersonalizationNotice = (status, text) => { personalizationNotice.value = { status, text } }
+const personalizationLocks = computed(() => {
+  const d = personalDecision.value
+  if (!isPersonalizationPage.value || !d.decision_id) return { select:false, confirm:false, noTarget:false, cancel:false }
+  const attempt = d.attempt?.outcome || null
+  const ready = d.display === 'saved' && !d.conflict && !d.busy
+  return {
+    select: !ready || Boolean(attempt),
+    confirm: !ready || (attempt !== null && attempt !== 'user_selected'),
+    noTarget: !ready || (attempt !== null && attempt !== 'user_no_target'),
+    cancel: d.busy || (!d.conflict && attempt !== null && attempt !== 'user_cancelled')
+  }
+})
+const resetPersonalizationGuidance = () => {
+  if (!isPersonalizationPage.value) return
+  scanGuidanceMessage.value = isScanning.value ? 'Please place the barcode inside the frame' : 'Choose another image, or start the camera.'
+}
+const abortPersonalizationRequest = () => { if (personalizationAbort) { personalizationAbort.abort(); personalizationAbort = null } }
+const formatPersonalHistory = candidate => {
+  const f = candidate.personalization_feature
+  if (!f) return ''
+  const personal = f.personal.current_task
+  const measured = Object.values(f.spatial || {}).some(v => v?.available)
+  const basis = measured ? 'task + position' : 'task only (position not measured for this frame)'
+  if (f.history_source === 'personal_task_history') return `Your history for this task: ${personal.selected} selected / ${personal.shown} shown`
+  if (f.history_source === 'global_task_history') return `No personal history yet; using shared history + ${basis}`
+  if (f.history_source === 'history_query_failed') return `History unavailable; using ${basis}`
+  return `No history yet; using ${basis}`
+}
+const POSITION_SOURCE_LABELS = { obb_detection:'label detector box', whole_image_zbar_polygon:'decoder outline', whole_image_opencv_qr_corners:'QR corner points' }
+const formatPersonalPosition = candidate => {
+  const f = candidate.personalization_feature
+  const p = f?.position || {}
+  const centre = f?.spatial?.center_distance, area = f?.spatial?.relative_area
+  if (p.status === 'measured' && centre?.available) {
+    const where = p.reference === 'scan_frame' ? 'scan frame' : 'image'
+    return `Position: ${Math.round(centre.value * 100)}% from ${where} centre${area?.available ? ` · ${(area.value * 100).toFixed(1)}% of image` : ''} · from ${POSITION_SOURCE_LABELS[p.source] || p.source}`
+  }
+  if (p.status === 'ambiguous_multiple_locations') return `Position not used: this code appears in ${p.location_count} places in the frame`
+  if (p.status === 'invalid') return 'Position not used: reported coordinates were invalid'
+  return 'Position not measured for this candidate'
+}
 const PREFERRED_CAMERA_DEVICE_KEY = 'preferredCameraDeviceId'
 
 const isHandheldClient = () => {
@@ -696,6 +850,7 @@ const fileInput = ref(null)
 const isScanning = ref(false)
 const currentMode = ref('camera')
 const scanResult = ref(null)
+const isFunctionalAcceptanceResult = ref(false)
 const scanAction = ref(null) // 保存后端的 action 标识
 const statusMessage = ref('')
 const statusType = ref('info')
@@ -703,7 +858,19 @@ const isVideoFrameReady = ref(false)
 const scanCapturePulse = ref(false)
 const scanCaptureMessage = ref('Code captured')
 const scanCaptureLocation = ref(null)
+const scanCaptureLocations = ref([])
 const scanGuidanceMessage = ref('Please place the barcode inside the frame')
+const scannerSelectionMode = ref(isPersonalizationPage.value ? 'multi' : 'quick')
+const selectionTaskContext = ref('general')
+const pendingSelectedRoiCandidate = ref(null)
+const currentCandidateDecision = ref(null)
+const isConfirmingRoiDecision = ref(false)
+const isPersistingCandidateDecision = ref(false)
+const candidateDecisionPersistenceStatus = ref('')
+const candidateDecisionPersistenceMessage = ref('')
+const isRetryingCandidateDecision = ref(false)
+const pendingCandidateDecisionRetries = ref([])
+const candidateAcceptanceBatchId = `candidate-acceptance-${new Date().toISOString().slice(0, 10)}-${Math.random().toString(36).slice(2, 8)}`
 const manualCode = ref('')
 const devices = ref([])
 const selectedDevice = ref(localStorage.getItem(PREFERRED_CAMERA_DEVICE_KEY) || '')
@@ -748,6 +915,11 @@ let sharedAudioContext = null
 let removeAudioPrimeListeners = null
 let scanCapturePulseTimer = null
 let roiCandidateSightings = new Map()
+let roiAssistRequestSequence = 0
+let candidateAcceptanceScenarioCounter = 0
+let candidatePickerGeneration = 0
+let candidateActionGeneration = 0
+let scannerComponentActive = true
 
 // 新建商品相关状态
 const showCreateItemModal = ref(false)
@@ -1011,8 +1183,7 @@ const getScanCaptureBounds = (location) => {
   return { minX, maxX, minY, maxY }
 }
 
-const scanCaptureOverlayStyle = computed(() => {
-  const location = scanCaptureLocation.value
+const buildScanCaptureOverlayStyle = (location, options = {}) => {
   const bounds = getScanCaptureBounds(location)
   const video = videoRef.value
   const stage = video?.parentElement
@@ -1031,17 +1202,20 @@ const scanCaptureOverlayStyle = computed(() => {
   const offsetX = (stageRect.width - renderedWidth) / 2
   const offsetY = (stageRect.height - renderedHeight) / 2
 
-  let width = Math.max((bounds.maxX - bounds.minX) * coverScale, 44)
-  let height = Math.max((bounds.maxY - bounds.minY) * coverScale, 44)
+  const minWidth = options.minWidth || 44
+  const minHeight = options.minHeight || 44
+  const edgeMargin = options.edgeMargin ?? 4
+  let width = Math.max((bounds.maxX - bounds.minX) * coverScale, minWidth)
+  let height = Math.max((bounds.maxY - bounds.minY) * coverScale, minHeight)
   let left = offsetX + (bounds.minX * coverScale)
   let top = offsetY + (bounds.minY * coverScale)
   const centerX = left + (width / 2)
   const centerY = top + (height / 2)
 
-  width = Math.min(width, stageRect.width - 8)
-  height = Math.min(height, stageRect.height - 8)
-  left = clampNumber(centerX - (width / 2), 4, Math.max(stageRect.width - width - 4, 4))
-  top = clampNumber(centerY - (height / 2), 4, Math.max(stageRect.height - height - 4, 4))
+  width = Math.min(width, stageRect.width - (edgeMargin * 2))
+  height = Math.min(height, stageRect.height - (edgeMargin * 2))
+  left = clampNumber(centerX - (width / 2), edgeMargin, Math.max(stageRect.width - width - edgeMargin, edgeMargin))
+  top = clampNumber(centerY - (height / 2), edgeMargin, Math.max(stageRect.height - height - edgeMargin, edgeMargin))
 
   return {
     left: `${left}px`,
@@ -1049,19 +1223,65 @@ const scanCaptureOverlayStyle = computed(() => {
     width: `${width}px`,
     height: `${height}px`
   }
-})
+}
+
+const scanCaptureOverlayStyle = computed(() => buildScanCaptureOverlayStyle(scanCaptureLocation.value))
+
+const scanCaptureTargetStyles = computed(() => scanCaptureLocations.value
+  .map((location, index) => {
+    const style = buildScanCaptureOverlayStyle(location, {
+      minWidth: 32,
+      minHeight: 32,
+      edgeMargin: 3
+    })
+    if (!style) return null
+
+    const firstPoint = normalizeCapturePoints(location?.points)[0] || { x: 0, y: 0 }
+    return {
+      id: `scan-target-${index}-${Math.round(firstPoint.x)}-${Math.round(firstPoint.y)}`,
+      style
+    }
+  })
+  .filter(Boolean))
 
 const hasPositionedScanCapture = computed(() => Boolean(scanCaptureOverlayStyle.value))
+
+const normalizeScanCaptureLocations = (locations = [], fallbackLocation = null) => {
+  const rawLocations = Array.isArray(locations) ? locations : []
+  const candidateLocations = rawLocations.length ? rawLocations : (fallbackLocation ? [fallbackLocation] : [])
+  const seen = new Set()
+
+  return candidateLocations
+    .filter(Boolean)
+    .filter((location) => {
+      const points = normalizeCapturePoints(location?.points)
+      if (!points.length) return false
+
+      const imageWidth = Number(location?.imageWidth || location?.frameWidth || 0)
+      const imageHeight = Number(location?.imageHeight || location?.frameHeight || 0)
+      const key = `${imageWidth}x${imageHeight}:${points
+        .map((point) => `${Math.round(point.x)}-${Math.round(point.y)}`)
+        .join('|')}`
+
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
 
 const hideScanCapturePulse = () => {
   clearScanCapturePulseTimer()
   scanCapturePulse.value = false
   scanCaptureLocation.value = null
+  scanCaptureLocations.value = []
 }
 
-const showScanCapturePulse = (message = 'Code captured', location = null) => {
+const showScanCapturePulse = (message = 'Code captured', location = null, locations = []) => {
+  const resolvedLocations = normalizeScanCaptureLocations(locations, location)
+
   scanCaptureMessage.value = message
-  scanCaptureLocation.value = location
+  scanCaptureLocation.value = location || resolvedLocations[0] || null
+  scanCaptureLocations.value = resolvedLocations
   scanCapturePulse.value = false
   clearScanCapturePulseTimer()
 
@@ -1069,6 +1289,8 @@ const showScanCapturePulse = (message = 'Code captured', location = null) => {
     scanCapturePulse.value = true
     scanCapturePulseTimer = window.setTimeout(() => {
       scanCapturePulse.value = false
+      scanCaptureLocation.value = null
+      scanCaptureLocations.value = []
       scanCapturePulseTimer = null
     }, 1250)
   })
@@ -1152,7 +1374,8 @@ const extractDownloadFilename = (contentDisposition, fallback) => {
 const fetchRankingSummary = async () => {
   if (!isAdmin || isLoadingRankingSummary.value) return
 
-  const token = localStorage.getItem('token')
+  let token = null
+  try { token = localStorage.getItem('token') } catch (_error) { /* continue as a local-only decision */ }
   if (!token) {
     handleAuthFailure()
     return
@@ -2038,6 +2261,7 @@ const runEnhancedScanLoop = () => {
 
   const video = videoRef.value
   if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
+  if (scannerSelectionMode.value === 'multi') return
 
   const now = performance.now()
   if (now - lastDecodeAttemptAt < 75) return
@@ -2226,6 +2450,20 @@ const getNormalizedScanFrame = () => {
 }
 
 const fetchWithTimeout = async (url, options = {}, timeoutMs = ROI_ASSIST_TIMEOUT_MS) => {
+  if (options.signal) {
+    const external = options.signal
+    const combined = new AbortController()
+    const forward = () => combined.abort()
+    const timer = window.setTimeout(forward, timeoutMs)
+    if (external.aborted) combined.abort()
+    else external.addEventListener('abort', forward, { once: true })
+    try {
+      return await fetch(url, { ...options, signal: combined.signal })
+    } finally {
+      clearTimeout(timer)
+      external.removeEventListener('abort', forward)
+    }
+  }
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     return fetch(url, {
       ...options,
@@ -2260,7 +2498,7 @@ const normalizeRoiCandidate = (candidate, index = 0) => {
     ...candidate,
     candidate_id: candidate?.candidate_id || `roi-${index + 1}`,
     decoded_text: decodedText,
-    score: Number(candidate?.score || 0),
+    score: candidate?.score == null || candidate?.score === '' ? null : Number(candidate.score),
     confidence: candidate?.confidence == null ? null : Number(candidate.confidence)
   }
 }
@@ -2292,6 +2530,10 @@ const buildLocationFromRoiCandidate = (candidate) => {
   }
 }
 
+const buildLocationsFromRoiCandidates = (candidates = []) => candidates
+  .map((candidate) => buildLocationFromRoiCandidate(candidate))
+  .filter(Boolean)
+
 const collectSuccessfulRoiCandidates = (payload) => {
   const rawCandidates = Array.isArray(payload?.candidates) ? payload.candidates : []
   const normalized = rawCandidates
@@ -2299,7 +2541,7 @@ const collectSuccessfulRoiCandidates = (payload) => {
     .filter((candidate) => candidate.success && candidate.decoded_text)
 
   if (!normalized.length && Array.isArray(payload?.decoded_texts)) {
-    return payload.decoded_texts
+    const fallbackCandidates = payload.decoded_texts
       .map((text, index) => normalizeRoiCandidate({
         candidate_id: `roi-fallback-${index + 1}`,
         decoded_text: text,
@@ -2311,6 +2553,12 @@ const collectSuccessfulRoiCandidates = (payload) => {
         score: index === 0 ? 0.6 : 0.5
       }, index))
       .filter((candidate) => candidate.decoded_text)
+    const seenFallback = new Set()
+    return fallbackCandidates.filter((candidate) => {
+      if (seenFallback.has(candidate.decoded_text)) return false
+      seenFallback.add(candidate.decoded_text)
+      return true
+    })
   }
 
   const deduped = []
@@ -2359,7 +2607,103 @@ const clampScore = (value, fallback = 0) => {
   return Math.min(Math.max(numericValue, 0), 1)
 }
 
-const getRoiOperationContext = () => String(scanAction.value || 'SCAN').trim().toUpperCase()
+const getRoiOperationContext = () => scannerSelectionMode.value === 'multi'
+  ? 'SCAN'
+  : String(scanAction.value || 'SCAN').trim().toUpperCase()
+
+const taskContextLabel = (taskContext) => ({
+  general: 'General scan',
+  item: 'Find item',
+  lot: 'Find batch',
+  bin: 'Find location'
+}[String(taskContext || 'general').toLowerCase()] || 'General scan')
+
+const hasMeasuredNumericValue = (value) => (
+  value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
+)
+
+const taskCompatibilityScore = (taskContext, candidateType) => {
+  const targetType = ({ item: 'ITEM', lot: 'LOT', bin: 'BIN' })[taskContext]
+  if (!targetType) return 0.5
+  return String(candidateType || '').toUpperCase() === targetType ? 1 : 0.2
+}
+
+const scoreRoiCandidateForMultiSelection = (candidate, index, taskContext) => {
+  const type = normalizeRoiCandidateType(candidate)
+  const hasCenter = hasMeasuredNumericValue(candidate?.center_distance_ratio)
+  const hasQuality = hasMeasuredNumericValue(candidate?.quality_score)
+  const hasConfidence = hasMeasuredNumericValue(candidate?.confidence)
+  const hasRoiScore = hasMeasuredNumericValue(candidate?.score)
+  const centerScore = hasCenter ? clampScore(1 - Number(candidate.center_distance_ratio)) : 0.5
+  const qualityScore = hasQuality ? clampScore(candidate.quality_score) : 0.5
+  const confidenceScore = hasConfidence ? clampScore(candidate.confidence) : 0.5
+  const roiScore = hasRoiScore ? clampScore(candidate.score) : 0.5
+  const databaseScore = candidate?.display?.found === true
+    ? 1
+    : candidate?.display?.found === false ? 0.2 : 0.5
+  const typeScore = taskCompatibilityScore(taskContext, type)
+  const pureRuleScore = Number((
+    (0.4 * typeScore) +
+    (0.22 * centerScore) +
+    (0.16 * qualityScore) +
+    (0.1 * confidenceScore) +
+    (0.08 * databaseScore) +
+    (0.04 * roiScore)
+  ).toFixed(4))
+  const reasons = []
+
+  if (taskContext !== 'general' && typeScore === 1) reasons.push('label type matches the chosen task')
+  if (hasCenter && centerScore >= 0.78) reasons.push('near the scan center')
+  if (hasQuality && qualityScore >= 0.72) reasons.push('clear decoded region')
+  if (candidate?.display?.found === true) reasons.push('matched warehouse data')
+
+  return {
+    ...candidate,
+    selection_type: type,
+    recommendation_mode: 'multi_task_rule',
+    pure_rule_score: pureRuleScore,
+    actual_strategy_score: pureRuleScore,
+    selection_score: pureRuleScore,
+    selection_score_percent: null,
+    selection_features: {
+      task_context: taskContext,
+      task_compatibility_score: typeScore,
+      center_score: centerScore,
+      quality_score: qualityScore,
+      confidence_score: confidenceScore,
+      database_score: databaseScore,
+      roi_score: roiScore,
+      feature_sources: {
+        center_distance_ratio: hasCenter ? (candidate?.center_distance_source || 'roi_assist') : 'missing',
+        quality_score: hasQuality ? (candidate?.quality_score_source || 'roi_assist') : 'missing',
+        confidence: hasConfidence ? 'roi_assist' : 'missing',
+        roi_score: hasRoiScore ? 'roi_assist' : 'missing'
+      },
+      missing_features: {
+        center_distance_ratio: !hasCenter,
+        quality_score: !hasQuality,
+        confidence: !hasConfidence,
+        roi_score: !hasRoiScore
+      },
+      ml_score: hasMeasuredNumericValue(candidate?.ml_score) ? Number(candidate.ml_score) : null,
+      original_index: index
+    },
+    selection_reasons: reasons
+  }
+}
+
+const rankRoiCandidatesForMultiSelection = (candidates, taskContext) => (
+  candidates
+    .map((candidate, index) => scoreRoiCandidateForMultiSelection(candidate, index, taskContext))
+    .sort((left, right) => right.pure_rule_score - left.pure_rule_score || left.selection_features.original_index - right.selection_features.original_index)
+    .map((candidate, index, ordered) => ({
+      ...candidate,
+      selection_rank: index + 1,
+      selection_score_margin: index === 0 && ordered[1]
+        ? Number((candidate.pure_rule_score - ordered[1].pure_rule_score).toFixed(4))
+        : null
+    }))
+)
 
 const typeMatchScoreByContext = (type, operationContext) => {
   const normalizedType = String(type || 'CODE').toUpperCase()
@@ -2421,13 +2765,13 @@ const explainRoiSelection = (parts, riskPenalty, type, displayFound) => {
 
 const scoreRoiCandidateForSelection = (candidate, index = 0, operationContext = getRoiOperationContext()) => {
   const type = normalizeRoiCandidateType(candidate)
-  const centerScore = Number.isFinite(Number(candidate?.center_distance_ratio))
+  const centerScore = hasMeasuredNumericValue(candidate?.center_distance_ratio)
     ? clampScore(1 - Number(candidate.center_distance_ratio))
     : 0.52
-  const confidenceScore = clampScore(candidate?.confidence, candidate?.confidence == null ? 0.55 : 0)
-  const roiScore = clampScore(candidate?.score, 0.5)
-  const qualityScore = clampScore(candidate?.quality_score, 0.55)
-  const areaScore = Number.isFinite(Number(candidate?.detection_area_ratio))
+  const confidenceScore = hasMeasuredNumericValue(candidate?.confidence) ? clampScore(candidate.confidence) : 0.55
+  const roiScore = hasMeasuredNumericValue(candidate?.score) ? clampScore(candidate.score) : 0.5
+  const qualityScore = hasMeasuredNumericValue(candidate?.quality_score) ? clampScore(candidate.quality_score) : 0.55
+  const areaScore = hasMeasuredNumericValue(candidate?.detection_area_ratio)
     ? clampScore(Math.sqrt(Math.max(Number(candidate.detection_area_ratio), 0)) * 4)
     : 0.45
   const displayFound = candidate?.display?.found
@@ -2435,7 +2779,7 @@ const scoreRoiCandidateForSelection = (candidate, index = 0, operationContext = 
   const typeScore = typeMatchScoreByContext(type, operationContext)
   const stabilityScore = getCandidateSightingScore(candidate)
   const feedbackScore = clampScore(candidate?.feedback_score, 0)
-  const mlScore = Number.isFinite(Number(candidate?.ml_score))
+  const mlScore = hasMeasuredNumericValue(candidate?.ml_score)
     ? clampScore(Number(candidate.ml_score), 0.5)
     : null
   const mlWeight = mlScore == null ? 0 : candidate?.ml_reliable ? 0.28 : 0.12
@@ -2528,10 +2872,16 @@ const sanitizeRoiSelectionCandidate = (candidate) => ({
   candidate_id: candidate?.candidate_id || '',
   decoded_text: extractRoiDecodedText(candidate),
   decoded_types: candidate?.decoded_types || [],
+  barcode_format: candidate?.decoded_types?.[0] || null,
   class_name: candidate?.class_name || '',
+  detector_class_name: candidate?.class_name || null,
+  candidate_source: candidate?.source || null,
   selection_type: candidate?.selection_type || normalizeRoiCandidateType(candidate),
+  business_type: candidate?.selection_type || normalizeRoiCandidateType(candidate),
   selection_score: candidate?.selection_score ?? null,
   selection_score_percent: candidate?.selection_score_percent ?? null,
+  pure_rule_score: candidate?.pure_rule_score ?? null,
+  actual_strategy_score: candidate?.actual_strategy_score ?? null,
   selection_rank: candidate?.selection_rank ?? null,
   selection_score_margin: candidate?.selection_score_margin ?? null,
   selection_risk_penalty: candidate?.selection_risk_penalty ?? null,
@@ -2540,8 +2890,19 @@ const sanitizeRoiSelectionCandidate = (candidate) => ({
   confidence: candidate?.confidence ?? null,
   score: candidate?.score ?? null,
   center_distance_ratio: candidate?.center_distance_ratio ?? null,
+  center_distance_source: candidate?.center_distance_source || (hasMeasuredNumericValue(candidate?.center_distance_ratio) ? 'roi_assist' : 'missing'),
+  center_reference: candidate?.center_reference || candidate?.target_frame?.reference || null,
+  target_frame: candidate?.target_frame || null,
   detection_area_ratio: candidate?.detection_area_ratio ?? null,
+  relative_area: candidate?.relative_area ?? candidate?.detection_area_ratio ?? null,
   quality_score: candidate?.quality_score ?? null,
+  quality_score_source: candidate?.quality_score_source || (hasMeasuredNumericValue(candidate?.quality_score) ? 'roi_assist' : 'missing'),
+  roi_width: candidate?.roi_width ?? null,
+  roi_height: candidate?.roi_height ?? null,
+  brightness: candidate?.brightness ?? null,
+  contrast: candidate?.contrast ?? null,
+  blur_score: candidate?.blur_score ?? null,
+  confidence_source: hasMeasuredNumericValue(candidate?.confidence) ? 'roi_assist' : 'missing',
   feedback_score: candidate?.feedback_score ?? null,
   feedback_signal: candidate?.feedback_signal || null,
   ml_score: candidate?.ml_score ?? null,
@@ -2580,24 +2941,270 @@ const loadLocalSelectionSamples = () => {
   }
 }
 
+pendingCandidateDecisionRetries.value = loadLocalSelectionSamples().filter((sample) => (
+  sample?.data_identity === 'functional_acceptance' && ['pending', 'local_only', 'needs_retry'].includes(sample?.persistence_status)
+)).slice(0, 10)
+
 const saveLocalSelectionSample = (sample) => {
-  const nextSamples = [sample, ...loadLocalSelectionSamples()]
+  const oldSamples = loadLocalSelectionSamples()
+  const nextSamples = sample?.decision_id
+    ? [sample, ...oldSamples.filter((entry) => entry?.decision_id !== sample.decision_id)]
+    : [sample, ...oldSamples]
+  const boundedSamples = nextSamples
     .filter(Boolean)
     .slice(0, 80)
-  localStorage.setItem(SCANNER_SELECTION_STORAGE_KEY, JSON.stringify(nextSamples))
+  localStorage.setItem(SCANNER_SELECTION_STORAGE_KEY, JSON.stringify(boundedSamples))
+}
+
+const updatePendingCandidateDecisionRetry = (sample, shouldRetry) => {
+  const withoutCurrent = pendingCandidateDecisionRetries.value.filter((entry) => entry?.decision_id !== sample?.decision_id)
+  pendingCandidateDecisionRetries.value = shouldRetry
+    ? [{ ...sample }, ...withoutCurrent].slice(0, 10)
+    : withoutCurrent
+}
+
+const setCandidateDecisionPersistenceState = (status, sample = null) => {
+  candidateDecisionPersistenceStatus.value = status
+  const messages = {
+    saved: '已保存到服务器（功能验收记录，不用于模型训练）',
+    late_upload: '已补存到服务器；首次展示未能核验，本条不用于模型训练',
+    local_only: '目前仅保存在本机；服务器日志尚未确认',
+    needs_retry: '日志未能确认保存；可点击重试',
+    conflict: '服务器记录与本次操作不一致；本次选择没有进入业务处理'
+  }
+  candidateDecisionPersistenceMessage.value = messages[status] || ''
+  if (sample) updatePendingCandidateDecisionRetry(sample, ['local_only', 'needs_retry'].includes(status))
+}
+
+const persistCandidateDecisionSample = async (sample) => {
+  let localStored = false
+  const pendingSample = { ...sample, persistence_status: 'pending', training_eligible: false }
+  try {
+    saveLocalSelectionSample(pendingSample)
+    localStored = true
+  } catch (error) {
+    console.warn('[ROI Assist] local decision log could not be stored.', error)
+  }
+
+  const token = localStorage.getItem('token')
+  if (!token) {
+    const status = localStored ? 'local_only' : 'needs_retry'
+    const finalSample = { ...sample, persistence_status: status, training_eligible: false }
+    if (localStored) {
+      try { saveLocalSelectionSample(finalSample) } catch (_error) { /* keep retryable in memory */ }
+    }
+    setCandidateDecisionPersistenceState(status, finalSample)
+    return { status, accepted: localStored, saved: false, sample: finalSample }
+  }
+
+  try {
+    const response = await fetchWithTimeout('/api/scanner/roi-assist/selection-feedback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(pendingSample),
+      keepalive: true
+    }, 5000)
+    const payload = await response.json().catch(() => null)
+    const expectedCandidateId = sample.selected_candidate_id == null ? null : String(sample.selected_candidate_id)
+    const canonicalCandidateId = payload?.selected_candidate_id == null ? null : String(payload.selected_candidate_id)
+
+    if (response.status === 409 || payload?.code === 'DECISION_TERMINAL_CONFLICT') {
+      const finalSample = { ...sample, persistence_status: 'conflict', training_eligible: false, server_canonical_decision: payload?.canonical_decision || null }
+      if (localStored) {
+        try { saveLocalSelectionSample(finalSample) } catch (_error) { /* preserve the in-memory copy */ }
+      }
+      setCandidateDecisionPersistenceState('conflict', finalSample)
+      return { status: 'conflict', accepted: false, saved: false, canonical: payload?.canonical_decision || null, sample: finalSample }
+    }
+
+    if (!response.ok || !payload?.success) {
+      const status = localStored ? 'local_only' : 'needs_retry'
+      const finalSample = { ...sample, persistence_status: status, training_eligible: false }
+      if (localStored) {
+        try { saveLocalSelectionSample(finalSample) } catch (_error) { /* preserve the in-memory copy */ }
+      }
+      setCandidateDecisionPersistenceState(status, finalSample)
+      return { status, accepted: localStored, saved: false, sample: finalSample, http_status: response.status }
+    }
+
+    const canonicalMatches = payload.decision_type === sample.decision_type && canonicalCandidateId === expectedCandidateId
+    if (!canonicalMatches) {
+      const finalSample = { ...sample, persistence_status: 'conflict', training_eligible: false, server_canonical_decision: {
+        decision_type: payload.decision_type || null,
+        selected_candidate_id: payload.selected_candidate_id || null
+      } }
+      if (localStored) {
+        try { saveLocalSelectionSample(finalSample) } catch (_error) { /* preserve the in-memory copy */ }
+      }
+      setCandidateDecisionPersistenceState('conflict', finalSample)
+      return { status: 'conflict', accepted: false, saved: false, canonical: finalSample.server_canonical_decision, sample: finalSample }
+    }
+
+    const status = payload.persistence_status === 'late_upload' ? 'late_upload' : 'saved'
+    const finalSample = {
+      ...sample,
+      persistence_status: status,
+      snapshot_status: payload.snapshot_status || null,
+      training_eligible: false,
+      server_recorded_at: payload.server_received_at || null
+    }
+    if (localStored) {
+      try { saveLocalSelectionSample(finalSample) } catch (_error) { /* server copy remains authoritative */ }
+    }
+    setCandidateDecisionPersistenceState(status, finalSample)
+    return { status, accepted: true, saved: true, sample: finalSample }
+  } catch (error) {
+    console.warn('[ROI Assist] candidate decision save failed.', error)
+    const status = localStored ? 'local_only' : 'needs_retry'
+    const finalSample = { ...sample, persistence_status: status, training_eligible: false }
+    if (localStored) {
+      try { saveLocalSelectionSample(finalSample) } catch (_error) { /* preserve the in-memory copy */ }
+    }
+    setCandidateDecisionPersistenceState(status, finalSample)
+    return { status, accepted: localStored, saved: false, sample: finalSample }
+  }
+}
+
+const retryCandidateDecisionSave = async (decisionId) => {
+  if (isRetryingCandidateDecision.value) return
+  const sample = pendingCandidateDecisionRetries.value.find((entry) => entry?.decision_id === decisionId)
+  if (!sample) return
+  isRetryingCandidateDecision.value = true
+  isPersistingCandidateDecision.value = true
+  try {
+    await persistCandidateDecisionSample(sample)
+  } finally {
+    isRetryingCandidateDecision.value = false
+    isPersistingCandidateDecision.value = false
+  }
+}
+
+const makeDecisionClientEvent = (decision, decisionType, selectedCandidateId) => {
+  const existing = [...(decision.events || [])].reverse().find((event) => (
+    event?.event_type === decisionType && String(event?.selected_candidate_id || '') === String(selectedCandidateId || '')
+  ))
+  if (existing?.event_id) return existing
+  const occurredAt = new Date().toISOString()
+  return {
+    event_id: `event-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`.slice(0, 80),
+    event_type: decisionType,
+    occurred_at: occurredAt,
+    selected_candidate_id: selectedCandidateId || null
+  }
+}
+
+// Sends one event for a frozen snapshot. Never marks anything saved by itself:
+// callers decide what to show from the returned status.
+const sendPersonalizationEvent = async (decision, outcome, selectedCandidate = null) => {
+  const body = { outcome }
+  if (outcome === 'candidate_displayed') body.displayed_order = decision.displayed_order
+  if (outcome === 'user_selected') body.selected_candidate_id = selectedCandidate?.candidate_id || null
+  try {
+    const response = await fetchWithTimeout(`/api/candidate-recommendation/snapshots/${encodeURIComponent(decision.decision_id)}/events`, { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${localStorage.getItem('token')}`}, body:JSON.stringify(body), keepalive:true },5000)
+    const payload = await response.json().catch(() => null)
+    if (response.ok && payload?.success) return { status:'saved', accepted:true, saved:true, event:payload.event }
+    return { status:response.status === 409 ? 'conflict' : 'needs_retry', accepted:false, saved:false, http_status:response.status, message:payload?.message || null }
+  } catch (_error) { return { status:'needs_retry', accepted:false, saved:false, http_status:null } }
+}
+
+const personalizationOutcomeText = (outcome, candidate) => outcome === 'user_selected'
+  ? `the choice “${formatRoiCandidateTitle(candidate)}”`
+  : outcome === 'user_no_target' ? '“no target in this list”' : 'the cancellation'
+
+const ownsPersonalDecision = (decision) => currentCandidateDecision.value?.decision_id === decision.decision_id &&
+  currentCandidateDecision.value?.state_version === decision.state_version
+
+const closePersonalizationPicker = ({ resume = true } = {}) => {
+  currentCandidateDecision.value = null
+  pendingSelectedRoiCandidate.value = null
+  showMultiCodePicker.value = false
+  roiAssistCandidates.value = []
+  isConfirmingRoiDecision.value = false
+  isPersistingCandidateDecision.value = false
+  candidatePickerGeneration += 1
+  personalDecision.value = { decision_id:null, display:'none', attempt:null, conflict:false, busy:false }
+  resetPersonalizationGuidance()
+  resetRoiAssistAutoTimer()
+  if (resume) resumeOutboundLiveDecoding()
+}
+
+// Terminal outcome for a personalization decision. The list closes only after the server
+// confirms; a failed save keeps the list and selection, and only the same outcome may be retried.
+const persistPersonalizationTerminal = async (outcome, candidate = null) => {
+  const decision = currentCandidateDecision.value
+  const state = personalDecision.value
+  if (!decision?.personalization_snapshot || state.decision_id !== decision.decision_id) return { status:'stale', saved:false }
+  if (state.busy || decision.pending_terminal || isConfirmingRoiDecision.value) return { status:'busy', saved:false }
+  if (state.conflict) {
+    if (outcome === 'user_cancelled') closePersonalizationPicker()
+    return { status:'conflict', saved:false }
+  }
+  if (outcome !== 'user_cancelled' && state.display !== 'saved') return { status:'display_not_saved', saved:false }
+  const selectedId = outcome === 'user_selected' ? (candidate?.candidate_id ?? null) : null
+  if (outcome === 'user_selected' && !decision.candidates.some(c => c.candidate_id === selectedId)) return { status:'invalid_selection', saved:false }
+  if (state.attempt && (state.attempt.outcome !== outcome || state.attempt.selected_candidate_id !== selectedId)) return { status:'locked', saved:false }
+  const attempt = { outcome, selected_candidate_id:selectedId, title:candidate ? formatRoiCandidateTitle(candidate) : null }
+  personalDecision.value = { ...state, attempt, busy:true }
+  decision.pending_terminal = outcome
+  isConfirmingRoiDecision.value = true
+  setPersonalizationNotice('saving', `Saving ${personalizationOutcomeText(outcome, candidate)}…`)
+  const result = await sendPersonalizationEvent(decision, outcome, candidate)
+  decision.pending_terminal = null
+  if (!ownsPersonalDecision(decision)) return { ...result, stale:true }
+  isConfirmingRoiDecision.value = false
+  personalDecision.value = { ...personalDecision.value, busy:false }
+  if (result.status === 'saved') {
+    const purpose = personalizationPurposeLabel(decision.personalization_snapshot.collection_mode)
+    closePersonalizationPicker()
+    const saved = outcome === 'user_selected' ? 'Target confirmed and choice saved.' : outcome === 'user_no_target' ? '“No target” saved.' : 'Cancellation saved.'
+    const scope = outcome === 'user_selected' ? purpose : 'This is not counted as a preference choice.'
+    setPersonalizationNotice('saved', `${saved} ${scope} Stock was not changed.`)
+    setRoiAssistStatus(saved, { autoClearMs:0 })
+    return { ...result, closed:true }
+  }
+  if (result.status === 'conflict') {
+    personalDecision.value = { ...personalDecision.value, conflict:true }
+    setPersonalizationNotice('conflict', `Not applied: the server already holds a different result for this list (${result.message || 'conflict'}). Nothing was processed. Close the list and identify the frame again.`)
+    return result
+  }
+  const reason = result.http_status ? `server answered ${result.http_status}` : 'no answer from the server'
+  setPersonalizationNotice('needs_retry', `Not confirmed as saved (${reason}): ${personalizationOutcomeText(outcome, candidate)}. Your selection is kept — press retry; a retry never records it twice. Nothing was processed. Leaving this page leaves this result unconfirmed.`)
+  setRoiAssistStatus('Not confirmed as saved. Retry to save this result.', { autoClearMs:0 })
+  return result
+}
+
+const recordPersonalizationDisplay = async (decision) => {
+  personalDecision.value = { ...personalDecision.value, busy:true }
+  const result = await sendPersonalizationEvent(decision, 'candidate_displayed')
+  if (!ownsPersonalDecision(decision)) return result
+  personalDecision.value = { ...personalDecision.value, busy:false, display:result.status === 'saved' ? 'saved' : 'failed' }
+  if (result.status === 'saved') setPersonalizationNotice('', '')
+  else setPersonalizationNotice('needs_retry', `Could not record that this list was shown (${result.http_status ? `server answered ${result.http_status}` : 'no answer from the server'}). Choosing is disabled until it is recorded; nothing has been saved.`)
+  return result
+}
+
+const retryPersonalizationDisplay = async () => {
+  const decision = currentCandidateDecision.value
+  if (!decision?.personalization_snapshot || personalDecision.value.busy || personalDecision.value.display !== 'failed') return
+  await recordPersonalizationDisplay(decision)
 }
 
 const recordRoiSelectionFeedback = async ({
   selectedCandidate = null,
   candidates = [],
   trigger = 'manual',
-  decisionType = 'user_selected'
+  decisionType = 'user_selected',
+  decision = null
 } = {}) => {
-  if (!Array.isArray(candidates) || !candidates.length) return
+  if (!Array.isArray(candidates) || (!candidates.length && !decision)) return
+  if (decision?.personalization_snapshot) return sendPersonalizationEvent(decision, decisionType, selectedCandidate)
 
   const now = new Date()
   const activeSession = activeBenchmarkSession.value
-  const sample = {
+  const legacySample = {
     session_id: activeSession?.id || `selection-${Date.now()}`,
     trigger,
     operation_context: getRoiOperationContext(),
@@ -2613,13 +3220,91 @@ const recordRoiSelectionFeedback = async ({
     created_at: now.toISOString()
   }
 
-  saveLocalSelectionSample(sample)
+  if (decision) {
+    const selectedCandidateId = selectedCandidate?.candidate_id || null
+    const clientEvent = makeDecisionClientEvent(decision, decisionType, selectedCandidateId)
+    const currentEvents = Array.isArray(decision.events) ? decision.events : []
+    decision.events = currentEvents.some((event) => event?.event_id === clientEvent.event_id)
+      ? currentEvents
+      : [...currentEvents, clientEvent]
+    const sample = {
+        ...legacySample,
+        session_id: decision.decision_id,
+        decision_id: decision.decision_id,
+        parent_session_id: decision.parent_session_id || null,
+        data_identity: decision.data_identity || 'functional_acceptance',
+        acceptance_batch_id: decision.acceptance_batch_id || candidateAcceptanceBatchId,
+        scenario_id: decision.scenario_id || null,
+        training_eligible: false,
+        task_context: decision.task_context,
+        operation_context: 'SCAN',
+        started_at: decision.capture_started_at,
+        captured_at: decision.captured_at,
+        candidate_visible_at: decision.candidate_visible_at || null,
+        capture_to_visible_ms: decision.capture_to_visible_ms ?? null,
+        controls_enabled_at: decision.controls_enabled_at || null,
+        controls_enabled_delay_ms: decision.controls_enabled_delay_ms ?? null,
+        confirmation_time_ms: decisionType === 'candidate_displayed' || decision.visible_perf_ms == null
+          ? null
+          : Math.max(0, Math.round(performance.now() - decision.visible_perf_ms)),
+        confirmed_at: decisionType === 'candidate_displayed' ? null : now.toISOString(),
+        selected_candidate_id: selectedCandidate?.candidate_id || null,
+        decision_type: decisionType,
+        candidate_count: decision.candidates.length,
+        detection_count: decision.pool?.detection_count ?? null,
+        returned_roi_count: decision.pool?.returned_roi_count ?? null,
+        successful_decode_count: decision.pool?.successful_decode_count ?? null,
+        unique_decoded_count: decision.pool?.unique_decoded_count ?? null,
+        duplicate_decode_count: decision.pool?.duplicate_decode_count ?? null,
+        decode_failure_count: decision.pool?.decode_failure_count ?? null,
+        parse_unresolved_count: decision.pool?.parse_unresolved_count ?? null,
+        parse_failure_count: decision.pool?.parse_failure_count ?? null,
+        candidate_count_after_dedup: decision.pool?.candidate_count_after_dedup ?? null,
+        candidate_pool_limit: decision.pool?.candidate_pool_limit ?? null,
+        candidate_pool_truncated: decision.pool?.truncated ?? null,
+        candidate_pool_truncation_reason: decision.pool?.truncation_reason ?? null,
+        candidate_pool_status: decision.pool?.status || 'detector_reported_only',
+        pool_diagnostics: { ...(decision.pool || {}) },
+        displayed_order: decision.displayed_order,
+        pure_rule_order: decision.pure_rule_order,
+        pure_rule_scores: decision.pure_rule_scores,
+        actual_strategy_order: decision.actual_strategy_order,
+        actual_strategy_scores: decision.actual_strategy_scores,
+        model_shadow_order: decision.model_shadow_order,
+        old_ml_shadow_status: decision.old_ml_shadow_status || 'not_executed',
+        old_ml_shadow_model_available: decision.old_ml_shadow_model_available ?? null,
+        old_ml_shadow_model_version: decision.old_ml_shadow_model_version || null,
+        old_ml_shadow_request_elapsed_ms: decision.old_ml_shadow_request_elapsed_ms ?? null,
+        old_ml_shadow_inference_elapsed_ms: decision.old_ml_shadow_inference_elapsed_ms ?? null,
+        rule_first_candidate_id: decision.rule_first_candidate_id || null,
+        model_recommended_candidate_id: null,
+        actual_strategy_first_candidate_id: decision.actual_strategy_first_candidate_id || null,
+        accepted_rule_first: decisionType === 'user_selected'
+          ? String(selectedCandidate?.candidate_id || '') === String(decision.rule_first_candidate_id || '')
+          : null,
+        feature_version: decision.feature_version,
+        candidate_list_version: decision.candidate_list_version,
+        events: [...decision.events],
+        client_event: clientEvent,
+        candidates: decision.candidates.map(sanitizeRoiSelectionCandidate),
+        created_at: decision.created_at,
+        persistence_status: 'pending'
+      }
+    return persistCandidateDecisionSample(sample)
+  }
+
+  const sample = legacySample
+  try {
+    saveLocalSelectionSample(sample)
+  } catch (error) {
+    console.warn('[ROI Assist] local decision log could not be stored.', error)
+  }
 
   const token = localStorage.getItem('token')
   if (!token) return
 
   try {
-    await fetch('/api/scanner/roi-assist/selection-feedback', {
+    const response = await fetchWithTimeout('/api/scanner/roi-assist/selection-feedback', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -2627,16 +3312,24 @@ const recordRoiSelectionFeedback = async ({
       },
       body: JSON.stringify(sample),
       keepalive: true
-    })
+    }, 5000)
+    if (!response.ok) {
+      console.warn('[ROI Assist] selection feedback was saved locally but not accepted by the server.', response.status)
+      return false
+    }
+    return true
   } catch (error) {
     console.warn('[ROI Assist] selection feedback save failed', error)
+    return false
   }
 }
 
 const formatRoiCandidateMeta = (candidate) => {
   const display = candidate?.display || {}
   const pieces = []
-  if (Number.isFinite(candidate?.selection_score_percent)) {
+  if (candidate?.recommendation_mode === 'multi_task_rule') {
+    pieces.push(candidate.selection_rank === 1 ? 'First in rule order' : 'Rule-assisted order')
+  } else if (Number.isFinite(candidate?.selection_score_percent)) {
     pieces.push(`${candidate.selection_score_percent}% selection`)
   }
   const className = display.entityType || (candidate?.class_name ? String(candidate.class_name).replaceAll('_', ' ') : '')
@@ -2644,7 +3337,8 @@ const formatRoiCandidateMeta = (candidate) => {
   if (Number.isFinite(candidate?.confidence)) {
     pieces.push(`${Math.round(candidate.confidence * 100)}% detect`)
   }
-  if (Number.isFinite(candidate?.score)) {
+  // Whole-image candidates carry a fixed placeholder score (0.64); it is not shown on the recommendation page.
+  if (Number.isFinite(candidate?.score) && !candidate?.personalization_feature) {
     pieces.push(`${Math.round(candidate.score * 100)} score`)
   }
   if (Number.isFinite(candidate?.center_distance_ratio)) {
@@ -2654,7 +3348,7 @@ const formatRoiCandidateMeta = (candidate) => {
   if (Number(candidate?.feedback_signal?.shown_count || 0) > 0) {
     pieces.push(`${candidate.feedback_signal.selected_count || 0}/${candidate.feedback_signal.shown_count} selected`)
   }
-  if (Number.isFinite(Number(candidate?.ml_score))) {
+  if (candidate?.recommendation_mode !== 'multi_task_rule' && hasMeasuredNumericValue(candidate?.ml_score)) {
     const modelStatus = candidate?.ml_model_status === 'warmup' ? ' ML warmup' : ' ML'
     pieces.push(`${Math.round(Number(candidate.ml_score) * 100)}%${modelStatus}`)
   }
@@ -2699,7 +3393,11 @@ const formatRoiCandidateSubtitle = (candidate) => {
 const formatRoiCandidatePrimary = (candidate) => {
   const display = candidate?.display || {}
   const primary = String(display.primary || '').trim()
-  const secondary = String(display.secondary || '').trim()
+  // The shared resolver's hint about continuing normal scan handling does not apply on the
+  // recommendation page, which only records the choice.
+  const secondary = isPersonalizationPage.value && display.found === false
+    ? 'Choosing it here only records your choice.'
+    : String(display.secondary || '').trim()
   if (primary && secondary) return `${primary} · ${secondary}`
   return primary || secondary
 }
@@ -2715,11 +3413,16 @@ const shouldShowRoiCandidateRaw = (candidate) => {
 }
 
 const enrichRoiCandidates = async (candidates) => {
-  if (!candidates.length) return candidates
+  if (!candidates.length) {
+    return { candidates, model_shadow: { status: 'not_executed_no_candidates', request_elapsed_ms: null, inference_elapsed_ms: null } }
+  }
 
   const token = localStorage.getItem('token')
-  if (!token) return candidates
+  if (!token) {
+    return { candidates, model_shadow: { status: 'not_executed_no_token', request_elapsed_ms: null, inference_elapsed_ms: null } }
+  }
 
+  const requestStartedAt = performance.now()
   try {
     const response = await fetch('/api/scanner/roi-assist/resolve-candidates', {
       method: 'POST',
@@ -2739,8 +3442,14 @@ const enrichRoiCandidates = async (candidates) => {
           score: candidate.score,
           center_distance_ratio: candidate.center_distance_ratio,
           center_reference: candidate.center_reference,
+          target_frame: candidate.target_frame,
           detection_area_ratio: candidate.detection_area_ratio,
           quality_score: candidate.quality_score,
+          roi_width: candidate.roi_width,
+          roi_height: candidate.roi_height,
+          brightness: candidate.brightness,
+          contrast: candidate.contrast,
+          blur_score: candidate.blur_score,
           best_preprocessing_mode: candidate.best_preprocessing_mode,
           source: candidate.source,
           points: candidate.points,
@@ -2761,49 +3470,297 @@ const enrichRoiCandidates = async (candidates) => {
       if (isAuthFailure(response.status, message)) {
         handleAuthFailure(message)
       }
-      return candidates
+      return {
+        candidates,
+        model_shadow: {
+          status: `request_failed_${response.status}`,
+          request_elapsed_ms: Math.round(performance.now() - requestStartedAt),
+          inference_elapsed_ms: null
+        }
+      }
     }
 
     if (payload.ranking_model) {
       console.info('[ROI Assist] ranking model', payload.ranking_model)
     }
     const resolvedById = new Map(payload.candidates.map((candidate) => [candidate.candidate_id, candidate]))
-    return candidates.map((candidate) => resolvedById.get(candidate.candidate_id) || candidate)
+    return {
+      candidates: candidates.map((candidate) => resolvedById.get(candidate.candidate_id) || candidate),
+      model_shadow: {
+        status: payload.ranking_model?.status || 'status_not_reported',
+        model_available: payload.ranking_model?.available ?? null,
+        model_version: payload.ranking_model?.version || null,
+        request_elapsed_ms: Math.round(performance.now() - requestStartedAt),
+        inference_elapsed_ms: hasMeasuredNumericValue(payload.ranking_model?.inference_elapsed_ms)
+          ? Number(payload.ranking_model.inference_elapsed_ms)
+          : null
+      }
+    }
   } catch (error) {
     console.warn('[ROI Assist] candidate enrichment failed', error)
-    return candidates
+    return {
+      candidates,
+      model_shadow: {
+        status: 'request_failed',
+        request_elapsed_ms: Math.round(performance.now() - requestStartedAt),
+        inference_elapsed_ms: null
+      }
+    }
   }
 }
 
-const dismissMultiCodePicker = () => {
-  const currentCandidates = [...roiAssistCandidates.value]
+const makeCandidateDecisionId = () => {
+  const randomPart = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return `candidate-${randomPart}`.slice(0, 80)
+}
+
+const isCurrentRoiAssistRequest = (request) => (
+  scannerComponentActive && (!request || (
+    request.sequence === roiAssistRequestSequence &&
+    request.mode === scannerSelectionMode.value &&
+    (request.mode !== 'multi' || request.task_context === selectionTaskContext.value)
+  ))
+)
+
+const getRoiPoolDiagnostics = (payload, candidates = []) => {
+  const rawCandidates = Array.isArray(payload?.candidates) ? payload.candidates : []
+  const successfulTexts = rawCandidates
+    .filter((candidate) => candidate?.success && extractRoiDecodedText(candidate))
+    .map(extractRoiDecodedText)
+  const fallbackTexts = successfulTexts.length || !Array.isArray(payload?.decoded_texts)
+    ? successfulTexts
+    : payload.decoded_texts.map((text) => String(text || '').trim()).filter(Boolean)
+  const uniqueTexts = new Set(fallbackTexts)
+  const explicitDetectionCount = [payload?.detection_count, payload?.detected_count, payload?.detections?.length]
+    .find((value) => hasMeasuredNumericValue(value))
+  const explicitTruncated = typeof payload?.candidate_pool_truncated === 'boolean'
+    ? payload.candidate_pool_truncated
+    : typeof payload?.truncated === 'boolean' ? payload.truncated : null
+  const unresolvedCount = candidates.filter((candidate) => (
+    !candidate?.display?.entityType && ['CODE', 'QR', 'BARCODE', 'UNKNOWN'].includes(normalizeRoiCandidateType(candidate))
+  )).length
+
+  const returnedRoiCount = rawCandidates.length > 0
+    ? rawCandidates.length
+    : Array.isArray(payload?.decoded_texts)
+      ? payload.decoded_texts.length
+      : Array.isArray(payload?.candidates) ? 0 : null
+  const hasPerRoiDecodeStatus = rawCandidates.length > 0 && rawCandidates.every((candidate) => typeof candidate?.success === 'boolean')
+  const explicitDecodeFailureCount = [payload?.decode_failure_count, payload?.failed_decode_count]
+    .find((value) => hasMeasuredNumericValue(value))
+  const decodeFailureCount = explicitDecodeFailureCount != null
+    ? Number(explicitDecodeFailureCount)
+    : hasPerRoiDecodeStatus ? rawCandidates.filter((candidate) => !candidate.success || !extractRoiDecodedText(candidate)).length : null
+
+  return {
+    detection_count: explicitDetectionCount == null ? null : Number(explicitDetectionCount),
+    returned_roi_count: returnedRoiCount,
+    returned_roi_count_source: rawCandidates.length > 0 ? 'candidate_roi_array' : Array.isArray(payload?.decoded_texts) ? 'decoded_texts' : Array.isArray(payload?.candidates) ? 'empty_candidate_roi_array' : 'not_reported',
+    successful_decode_count: fallbackTexts.length,
+    unique_decoded_count: uniqueTexts.size,
+    duplicate_decode_count: Math.max(0, fallbackTexts.length - uniqueTexts.size),
+    decode_failure_count: decodeFailureCount,
+    parse_unresolved_count: unresolvedCount,
+    parse_failure_count: unresolvedCount,
+    candidate_count_after_dedup: candidates.length,
+    candidate_pool_limit: hasMeasuredNumericValue(payload?.candidate_pool_limit ?? payload?.max_candidates)
+      ? Number(payload.candidate_pool_limit ?? payload.max_candidates)
+      : null,
+    candidate_pool_limit_source: hasMeasuredNumericValue(payload?.candidate_pool_limit ?? payload?.max_candidates)
+      ? 'roi_assist_service'
+      : 'not_reported',
+    truncated: explicitTruncated,
+    truncation_reason: payload?.candidate_pool_truncation_reason || payload?.truncation_reason || null,
+    status: explicitTruncated === true
+      ? 'service_reported_truncated'
+      : explicitTruncated === false ? 'service_reported_not_truncated' : 'detector_reported_only'
+  }
+}
+
+const persistDecisionAndClose = async (decisionType, selectedCandidate = null, { resume = true } = {}) => {
+  const decision = currentCandidateDecision.value
+  const visibleCandidates = decision?.candidates || [...roiAssistCandidates.value]
+  if (decision) {
+    if (decision.pending_terminal || isConfirmingRoiDecision.value) {
+      return { closed: false, shouldProcess: false, status: 'busy', decision_id: decision.decision_id }
+    }
+    if (decisionType === 'user_selected' && !decision.candidates.some((entry) => entry?.candidate_id === selectedCandidate?.candidate_id)) {
+      return { closed: false, shouldProcess: false, status: 'invalid_selection', decision_id: decision.decision_id }
+    }
+    const decisionId = decision.decision_id
+    const stateVersion = decision.state_version
+    decision.pending_terminal = decisionType
+    isConfirmingRoiDecision.value = true
+    const persistence = await recordRoiSelectionFeedback({
+      selectedCandidate,
+      candidates: visibleCandidates,
+      trigger: 'manual',
+      decisionType,
+      decision
+    })
+    const stillOwnsDecision = currentCandidateDecision.value?.decision_id === decisionId &&
+      currentCandidateDecision.value?.state_version === stateVersion
+    if (!stillOwnsDecision) {
+      return { closed: false, shouldProcess: false, stale: true, status: persistence?.status || 'unknown', decision_id: decisionId }
+    }
+    if (decisionType === 'user_selected' && persistence?.status === 'conflict') {
+      decision.pending_terminal = null
+      isConfirmingRoiDecision.value = false
+      isPersistingCandidateDecision.value = false
+      return { closed: false, shouldProcess: false, status: 'conflict', decision_id: decisionId }
+    }
+
+    currentCandidateDecision.value = null
+    pendingSelectedRoiCandidate.value = null
+    showMultiCodePicker.value = false
+    roiAssistCandidates.value = []
+    isConfirmingRoiDecision.value = false
+    isPersistingCandidateDecision.value = false
+    candidatePickerGeneration += 1
+    const closedGeneration = candidatePickerGeneration
+    if (resume) {
+      setRoiAssistStatus('Selection closed. Keep scanning when ready.', { autoClearMs: 1800 })
+      resetRoiAssistAutoTimer()
+      resumeOutboundLiveDecoding()
+    }
+    return {
+      closed: true,
+      shouldProcess: decisionType === 'user_selected',
+      status: persistence?.status || 'needs_retry',
+      decision_id: decisionId,
+      closed_generation: closedGeneration
+    }
+  } else if (decisionType === 'dismissed' && visibleCandidates.length) {
+    await recordRoiSelectionFeedback({
+      selectedCandidate: null,
+      candidates: visibleCandidates,
+      trigger: 'manual',
+      decisionType
+    })
+  }
+
+  currentCandidateDecision.value = null
+  pendingSelectedRoiCandidate.value = null
   showMultiCodePicker.value = false
   roiAssistCandidates.value = []
+  isConfirmingRoiDecision.value = false
+  isPersistingCandidateDecision.value = false
+  if (resume) {
+    if (isPersonalizationPage.value) scanGuidanceMessage.value = 'Choose another image, or start the camera.'
+    setRoiAssistStatus('Selection closed. Keep scanning when ready.', { autoClearMs: 1800 })
+    resetRoiAssistAutoTimer()
+    resumeOutboundLiveDecoding()
+  }
+  return { closed: true, shouldProcess: false, status: 'closed' }
+}
+
+const invalidateCurrentCandidateDecision = () => {
+  const decision = currentCandidateDecision.value
+  if (!decision || decision.pending_terminal) return
+  if (decision.personalization_snapshot) {
+    const state = personalDecision.value
+    closePersonalizationPicker({ resume:false })
+    // An unsaved attempted result is discarded, never turned into a cancellation.
+    if (state.attempt || state.conflict) {
+      setPersonalizationNotice('needs_retry', 'The open list was closed before its result was confirmed as saved. Nothing was processed.')
+      return
+    }
+    setPersonalizationNotice('saving', 'The open list was closed. Saving it as cancelled…')
+    void sendPersonalizationEvent(decision, 'user_cancelled').then((result) => {
+      if (!scannerComponentActive || currentCandidateDecision.value) return
+      setPersonalizationNotice(result.saved ? 'saved' : 'needs_retry', result.saved
+        ? 'The open list was closed and saved as cancelled. Nothing was processed.'
+        : 'The open list was closed; the cancellation could not be saved. Nothing was processed.')
+    })
+    return
+  }
+  const candidates = decision.candidates || []
+  const decisionId = decision.decision_id
+  currentCandidateDecision.value = null
+  pendingSelectedRoiCandidate.value = null
+  roiAssistCandidates.value = []
+  showMultiCodePicker.value = false
+  isPersistingCandidateDecision.value = false
+  isConfirmingRoiDecision.value = false
+  candidatePickerGeneration += 1
   void recordRoiSelectionFeedback({
     selectedCandidate: null,
-    candidates: currentCandidates,
+    candidates,
     trigger: 'manual',
-    decisionType: 'dismissed'
+    decisionType: 'user_cancelled',
+    decision
+  }).then((persistence) => {
+    if (persistence?.status === 'conflict') {
+      console.info('[ROI Assist] an interrupted decision already has a server terminal result.', decisionId)
+    }
   })
-  setRoiAssistStatus('Selection cancelled. Keep scanning when ready.', { autoClearMs: 1800 })
-  resetRoiAssistAutoTimer()
-  resumeOutboundLiveDecoding()
+}
+
+const dismissMultiCodePicker = () => {
+  if (isConfirmingRoiDecision.value || isPersistingCandidateDecision.value) return
+  if (currentCandidateDecision.value?.personalization_snapshot) {
+    void persistPersonalizationTerminal('user_cancelled')
+    return
+  }
+  if (currentCandidateDecision.value) {
+    void persistDecisionAndClose('user_cancelled')
+    return
+  }
+  void persistDecisionAndClose('dismissed')
+}
+
+const recordRoiNoTarget = async () => {
+  if (isConfirmingRoiDecision.value || isPersistingCandidateDecision.value) return
+  if (currentCandidateDecision.value?.personalization_snapshot) {
+    await persistPersonalizationTerminal('user_no_target')
+    return
+  }
+  if (currentCandidateDecision.value) {
+    await persistDecisionAndClose('user_no_target')
+    return
+  }
+  dismissMultiCodePicker()
 }
 
 const selectRoiCandidate = async (candidate) => {
+  const actionGeneration = candidateActionGeneration
   const decodedText = extractRoiDecodedText(candidate)
-  if (!decodedText) return
+  const decision = currentCandidateDecision.value
+  if (!decodedText || isConfirmingRoiDecision.value) return
+  if (decision && !decision.candidates.some((entry) => entry.candidate_id === candidate.candidate_id)) return
 
-  showMultiCodePicker.value = false
-  const currentCandidates = [...roiAssistCandidates.value]
-  roiAssistCandidates.value = []
-  setRoiAssistStatus('Target label selected.', { autoClearMs: 1400 })
-  void recordRoiSelectionFeedback({
-    selectedCandidate: candidate,
-    candidates: currentCandidates.length ? currentCandidates : [candidate],
-    trigger: 'manual',
-    decisionType: 'user_selected'
-  })
+  if (decision?.personalization_snapshot) {
+    const result = await persistPersonalizationTerminal('user_selected', candidate)
+    if (result.saved && result.closed && scannerComponentActive) {
+      selectedPersonalizedTarget.value = { title:formatRoiCandidateTitle(candidate), detail:formatRoiCandidateSubtitle(candidate) || decodedText, purpose:personalizationPurposeLabel(decision.personalization_snapshot.collection_mode) }
+    }
+    return
+  }
+  const visibleCandidates = decision?.candidates || [...roiAssistCandidates.value]
+  const captureLocations = buildLocationsFromRoiCandidates(visibleCandidates)
+  if (decision) {
+    const result = await persistDecisionAndClose('user_selected', candidate, { resume: false })
+    if (!result?.shouldProcess || result.decision_id !== decision.decision_id) return
+    if (candidateActionGeneration !== actionGeneration || currentMode.value !== 'camera') return
+    if (!scannerComponentActive || candidatePickerGeneration !== result.closed_generation || currentCandidateDecision.value) return
+    if (scannerSelectionMode.value !== 'multi' || selectionTaskContext.value !== decision.task_context) return
+    if (result.status === 'local_only' || result.status === 'needs_retry' || result.status === 'late_upload') {
+      setRoiAssistStatus(candidateDecisionPersistenceMessage.value, { autoClearMs: 0 })
+    }
+  } else {
+    await recordRoiSelectionFeedback({
+      selectedCandidate: candidate,
+      candidates: visibleCandidates.length ? visibleCandidates : [candidate],
+      trigger: 'manual',
+      decisionType: 'user_selected'
+    })
+    if (candidateActionGeneration !== actionGeneration || currentMode.value !== 'camera' || !scannerComponentActive) return
+    showMultiCodePicker.value = false
+    roiAssistCandidates.value = []
+    pendingSelectedRoiCandidate.value = null
+  }
+
+  setRoiAssistStatus('Target label confirmed.', { autoClearMs: 1400 })
   captureBenchmarkDecode({
     label: 'roi-assist-selected',
     format: candidate?.decoded_types?.[0] || candidate?.class_name || '',
@@ -2812,17 +3769,157 @@ const selectRoiCandidate = async (candidate) => {
   await handleScanResult(decodedText, {
     bypassCooldown: true,
     sourceMode: 'roi-assist',
-    captureLocation: buildLocationFromRoiCandidate(candidate)
+    captureLocation: buildLocationFromRoiCandidate(candidate),
+    captureLocations,
+    candidateDecisionId: decision?.decision_id || null,
+    candidateAcceptanceBatchId: decision?.acceptance_batch_id || null
   })
 }
 
-const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
-  const enrichedCandidates = await enrichRoiCandidates(collectSuccessfulRoiCandidates(payload))
+const confirmRoiCandidateSelection = async () => {
+  if (!pendingSelectedRoiCandidate.value || isConfirmingRoiDecision.value || isPersistingCandidateDecision.value) return
+  await selectRoiCandidate(pendingSelectedRoiCandidate.value)
+}
+
+const buildMultiCandidateDecision = (payload, candidates, request) => {
+  const pool = getRoiPoolDiagnostics(payload, candidates)
+  const displayedOrder = candidates.map((candidate) => candidate.candidate_id)
+  const modelShadowOrder = candidates
+    .filter((candidate) => hasMeasuredNumericValue(candidate?.ml_score))
+    .sort((left, right) => Number(right.ml_score) - Number(left.ml_score))
+    .map((candidate) => candidate.candidate_id)
+  const firstCandidate = candidates[0] || null
+  candidateAcceptanceScenarioCounter += 1
+
+  return {
+    decision_id: request.personalization_snapshot?.snapshot_id || request.decision_id,
+    state_version: ++candidatePickerGeneration,
+    parent_session_id: activeBenchmarkSession.value?.id || null,
+    data_identity: request.personalization_snapshot?.data_identity || 'functional_acceptance',
+    purpose: request.personalization_snapshot?.collection_mode || 'functional_acceptance',
+    personalization_snapshot: request.personalization_snapshot || null,
+    acceptance_batch_id: candidateAcceptanceBatchId,
+    scenario_id: `${request.task_context}-trial-${String(candidateAcceptanceScenarioCounter).padStart(3, '0')}`,
+    task_context: request.task_context,
+    operation_context: request.operation_context || 'SCAN',
+    candidate_list_version: 'roi-assist-obb-v1',
+    feature_version: request.personalization_snapshot?.feature_version || 'task-rule-v1',
+    capture_started_at: request.capture_started_at,
+    captured_at: request.captured_at,
+    capture_started_perf: request.capture_started_perf,
+    candidate_visible_at: null,
+    visible_perf_ms: null,
+    capture_to_visible_ms: null,
+    candidate_generation_status: payload?.success ? 'service_success' : 'service_returned_without_success',
+    pool,
+    displayed_order: displayedOrder,
+    pure_rule_order: request.personalization_snapshot?.pure_rule_order || displayedOrder,
+    actual_strategy_order: displayedOrder,
+    pure_rule_scores: candidates.map((candidate) => ({
+      candidate_id: candidate.candidate_id,
+      score: hasMeasuredNumericValue(candidate.pure_rule_score) ? Number(candidate.pure_rule_score) : null
+    })),
+    actual_strategy_scores: candidates.map((candidate) => ({
+      candidate_id: candidate.candidate_id,
+      score: hasMeasuredNumericValue(candidate.actual_strategy_score ?? candidate.pure_rule_score)
+        ? Number(candidate.actual_strategy_score ?? candidate.pure_rule_score)
+        : null
+    })),
+    model_shadow_order: modelShadowOrder,
+    old_ml_shadow_status: request.model_shadow?.status || 'not_executed',
+    old_ml_shadow_model_available: request.model_shadow?.model_available ?? null,
+    old_ml_shadow_model_version: request.model_shadow?.model_version || null,
+    old_ml_shadow_request_elapsed_ms: request.model_shadow?.request_elapsed_ms ?? null,
+    old_ml_shadow_inference_elapsed_ms: request.model_shadow?.inference_elapsed_ms ?? null,
+    rule_first_candidate_id: firstCandidate?.candidate_id || null,
+    actual_strategy_first_candidate_id: firstCandidate?.candidate_id || null,
+    model_recommended_candidate_id: null,
+    events: [],
+    candidates: [...candidates],
+    created_at: new Date().toISOString()
+  }
+}
+
+const showMultiCandidateDecision = async (payload, candidates, request, trigger) => {
+  if (!isCurrentRoiAssistRequest(request)) return
+  const candidateLocations = buildLocationsFromRoiCandidates(candidates)
+  const decision = buildMultiCandidateDecision(payload, candidates, request)
+  currentCandidateDecision.value = decision
+  pendingSelectedRoiCandidate.value = null
+  roiAssistCandidates.value = candidates
+  showMultiCodePicker.value = true
+  showScanCapturePulse(candidates.length ? 'Labels found' : 'Frame captured', candidateLocations[0] || null, candidateLocations)
+  setRoiAssistStatus(
+    candidates.length ? `${candidates.length} decoded candidate${candidates.length === 1 ? '' : 's'} found. Confirm the target.` : 'No decoded candidates in this frame.',
+    { autoClearMs: 0 }
+  )
+  stopScanLoop()
+  if (videoRef.value && !videoRef.value.paused) videoRef.value.pause()
+  await nextTick()
+  if (!isCurrentRoiAssistRequest(request) || currentCandidateDecision.value?.decision_id !== decision.decision_id) return
+
+  decision.candidate_visible_at = new Date().toISOString()
+  decision.visible_perf_ms = performance.now()
+  decision.capture_to_visible_ms = Math.max(0, Math.round(decision.visible_perf_ms - request.capture_started_perf))
+  if (decision.personalization_snapshot) {
+    personalDecision.value = { decision_id:decision.decision_id, display:'pending', attempt:null, conflict:false, busy:false }
+    setPersonalizationNotice('', '')
+    scanGuidanceMessage.value = 'Confirm the target in the list below.'
+    await recordPersonalizationDisplay(decision)
+    return
+  }
+  isPersistingCandidateDecision.value = true
+  const displayLogStartedAt = performance.now()
+  await recordRoiSelectionFeedback({
+    selectedCandidate: null,
+    candidates,
+    trigger,
+    decisionType: 'candidate_displayed',
+    decision
+  })
+  if (currentCandidateDecision.value?.decision_id === decision.decision_id) {
+    decision.controls_enabled_at = new Date().toISOString()
+    decision.controls_enabled_delay_ms = Math.max(0, Math.round(performance.now() - displayLogStartedAt))
+    isPersistingCandidateDecision.value = false
+  }
+}
+
+const handleRoiAssistPayload = async (payload, trigger = 'manual', request = null) => {
+  const rawCandidates = collectSuccessfulRoiCandidates(payload)
+  if (request?.personalization_snapshot) {
+    // Candidates were already resolved server-side; the legacy resolver is not called.
+    const snapshot = request.personalization_snapshot
+    if (!isCurrentRoiAssistRequest(request) || !scannerComponentActive) return
+    const byId = new Map(rawCandidates.map(c => [String(c.candidate_id),c]))
+    const candidates = snapshot.displayed_order.map(id => byId.get(String(id))).filter(Boolean)
+    if (candidates.length !== rawCandidates.length) throw new Error('Recommendation does not match the recognized frame')
+    candidates.forEach((c,index) => {
+      const feature = snapshot.features.find(f => f.candidate_id === c.candidate_id)
+      c.selection_rank = index+1
+      c.personalization_feature = feature
+      c.recommendation_mode = 'personal_task_space_rules'
+      c.actual_strategy_score = feature?.scores?.history_rules
+      c.selection_score_percent = null
+    })
+    await showMultiCandidateDecision(payload,candidates,request,trigger)
+    return
+  }
+  const enrichment = await enrichRoiCandidates(rawCandidates)
+  const enrichedCandidates = enrichment.candidates
+  if (!isCurrentRoiAssistRequest(request)) return
+  if (request?.mode === 'multi') {
+    request.model_shadow = enrichment.model_shadow
+    const candidates = rankRoiCandidatesForMultiSelection(enrichedCandidates, request.task_context)
+    await showMultiCandidateDecision(payload, candidates, request, trigger)
+    return
+  }
+
   const candidates = rankRoiCandidatesForSelection(
     enrichedCandidates,
     String(payload?.operation_context || getRoiOperationContext() || 'SCAN').toUpperCase()
   )
-  const leadingLocation = buildLocationFromRoiCandidate(candidates[0])
+  const candidateLocations = buildLocationsFromRoiCandidates(candidates)
+  const leadingLocation = candidateLocations[0] || buildLocationFromRoiCandidate(candidates[0])
 
   if (candidates.length > 1) {
     if (shouldAutoSelectRoiCandidate(candidates)) {
@@ -2842,19 +3939,18 @@ const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
       await handleScanResult(candidate.decoded_text, {
         bypassCooldown: true,
         sourceMode: 'roi-assist',
-        captureLocation: buildLocationFromRoiCandidate(candidate)
+        captureLocation: buildLocationFromRoiCandidate(candidate),
+        captureLocations: candidateLocations
       })
       return
     }
 
     roiAssistCandidates.value = candidates
     showMultiCodePicker.value = true
-    showScanCapturePulse('Labels found', leadingLocation)
+    showScanCapturePulse('Labels found', leadingLocation, candidateLocations)
     setRoiAssistStatus(`${candidates.length} labels found. Choose the target label.`, { autoClearMs: 2400 })
     stopScanLoop()
-    if (videoRef.value && !videoRef.value.paused) {
-      videoRef.value.pause()
-    }
+    if (videoRef.value && !videoRef.value.paused) videoRef.value.pause()
     return
   }
 
@@ -2872,7 +3968,8 @@ const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
     await handleScanResult(candidate.decoded_text, {
       bypassCooldown: true,
       sourceMode: 'roi-assist',
-      captureLocation: buildLocationFromRoiCandidate(candidate)
+      captureLocation: buildLocationFromRoiCandidate(candidate),
+      captureLocations: candidateLocations
     })
     return
   }
@@ -2881,40 +3978,101 @@ const handleRoiAssistPayload = async (payload, trigger = 'manual') => {
   scanGuidanceMessage.value = 'Move closer or hold steady'
 }
 
-const triggerRoiAssist = async (trigger = 'manual') => {
-  if (isRoiAssistRunning.value || !isScanning.value || !videoRef.value) return
+const setScannerSelectionMode = (mode) => {
+  const nextMode = mode === 'multi' ? 'multi' : 'quick'
+  if (nextMode === scannerSelectionMode.value) return
+  if (isConfirmingRoiDecision.value || isPersistingCandidateDecision.value || showMultiCodePicker.value) return
+  invalidateCurrentCandidateDecision()
+  roiAssistRequestSequence += 1
+  isRoiAssistRunning.value = false
+  currentCandidateDecision.value = null
+  pendingSelectedRoiCandidate.value = null
+  roiAssistCandidates.value = []
+  showMultiCodePicker.value = false
+  isPersistingCandidateDecision.value = false
+  scannerSelectionMode.value = nextMode
+  setRoiAssistStatus(nextMode === 'multi' ? 'Choose a task before identifying a frame.' : '', { autoClearMs: 0 })
+  if (videoRef.value?.paused && isScanning.value) resumeOutboundLiveDecoding()
+}
+
+const handleSelectionTaskChange = () => {
+  if (isConfirmingRoiDecision.value || isPersistingCandidateDecision.value || showMultiCodePicker.value) return
+  abortPersonalizationRequest()
+  invalidateCurrentCandidateDecision()
+  roiAssistRequestSequence += 1
+  isRoiAssistRunning.value = false
+  currentCandidateDecision.value = null
+  pendingSelectedRoiCandidate.value = null
+  roiAssistCandidates.value = []
+  showMultiCodePicker.value = false
+  isPersistingCandidateDecision.value = false
+  setRoiAssistStatus(`Task set to ${taskContextLabel(selectionTaskContext.value)}. Identify a new frame.`, { autoClearMs: 2200 })
+  if (videoRef.value?.paused && isScanning.value) resumeOutboundLiveDecoding()
+}
+
+const triggerRoiAssist = async (trigger = 'manual', uploadFile = null) => {
+  if (isRoiAssistRunning.value || (!uploadFile && (!isScanning.value || !videoRef.value))) return
   if (showMultiCodePicker.value || scanResult.value || hasInteractiveModalOpen.value) return
 
+  const request = {
+    sequence: ++roiAssistRequestSequence,
+    mode: scannerSelectionMode.value,
+    task_context: scannerSelectionMode.value === 'multi' ? selectionTaskContext.value : 'general',
+    decision_id: makeCandidateDecisionId(),
+    capture_started_at: new Date().toISOString(),
+    capture_started_perf: performance.now(),
+    captured_at: null,
+    operation_context: personalizationOperation.value,
+    collection_mode: personalizationConsent.value ? 'natural_preference' : 'functional_acceptance'
+  }
   isRoiAssistRunning.value = true
   lastRoiAssistAt = Date.now()
-  setRoiAssistStatus(trigger === 'auto' ? 'Trying enhanced scan...' : 'Running ROI Assist...')
+  setRoiAssistStatus(trigger === 'auto' ? 'Trying enhanced scan...' : 'Identifying this frame...')
   scanGuidanceMessage.value = trigger === 'auto'
     ? 'Enhanced scan is checking this frame...'
     : 'ROI Assist is checking this frame...'
 
+  if (isPersonalizationPage.value) {
+    abortPersonalizationRequest()
+    personalizationAbort = new AbortController()
+    request.signal = personalizationAbort.signal
+    selectedPersonalizedTarget.value = null
+    setPersonalizationNotice('', '')
+  }
   try {
-    const frameBlob = await captureVideoFrameAsJpeg(videoRef.value)
-    if (!isScanning.value || scanResult.value || showMultiCodePicker.value) return
+    if (isPersonalizationPage.value && request.mode === 'multi') {
+      const response = await fetchWithTimeout('/api/candidate-recommendation/tasks',{ method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${localStorage.getItem('token')}`},body:JSON.stringify({ type:request.task_context,operation:request.operation_context,step:'identify',collection_mode:request.collection_mode,consent:personalizationConsent.value }), signal:request.signal })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok || !payload?.task?.id) throw new Error(payload?.message || 'Could not freeze the current task')
+      request.task_id = payload.task.id
+    }
+    const frameBlob = uploadFile || await captureVideoFrameAsJpeg(videoRef.value)
+    if (!frameBlob || !scannerComponentActive || !isCurrentRoiAssistRequest(request) || (!uploadFile && !isScanning.value) || scanResult.value) return
+    request.captured_at = new Date().toISOString()
 
     const formData = new FormData()
-    formData.append('frame', frameBlob, 'scanner-frame.jpg')
+    formData.append('frame', frameBlob, uploadFile?.name || 'scanner-frame.jpg')
+    if (request.task_id) { formData.append('task_id', request.task_id); formData.append('request_id', request.decision_id) }
     formData.append('mode', 'obb')
     formData.append('trigger', trigger)
-    formData.append('operation_context', scanAction.value || 'scan')
-    const scanFrame = getNormalizedScanFrame()
-    if (scanFrame) {
-      formData.append('scan_frame', JSON.stringify(scanFrame))
-    }
+    formData.append('operation_context', request.mode === 'multi' ? 'scan' : (scanAction.value || 'scan'))
+    // The on-screen scan frame describes the live video, not an uploaded photo: uploads use the image centre.
+    const scanFrame = uploadFile ? null : getNormalizedScanFrame()
+    if (scanFrame) formData.append('scan_frame', JSON.stringify(scanFrame))
 
     const startedAt = performance.now()
-    const response = await fetchWithTimeout('/api/scanner/roi-assist', {
+    const response = await fetchWithTimeout(request.task_id ? '/api/candidate-recommendation/frames' : '/api/scanner/roi-assist', {
       method: 'POST',
-      body: formData
+      headers: { Authorization:`Bearer ${localStorage.getItem('token')}` },
+      body: formData,
+      ...(request.signal ? { signal:request.signal } : {})
     })
     const payload = await response.json().catch(() => null)
 
     console.log('[ROI Assist] finished', {
       trigger,
+      mode: request.mode,
+      taskContext: request.task_context,
       ok: response.ok,
       elapsedMs: Math.round(performance.now() - startedAt),
       serverMs: payload?.processing_time_ms,
@@ -2922,25 +4080,39 @@ const triggerRoiAssist = async (trigger = 'manual') => {
       success: payload?.success
     })
 
+    if (!isCurrentRoiAssistRequest(request)) return
     if (!response.ok || !payload) {
       throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`)
     }
 
-    await handleRoiAssistPayload(payload, trigger)
+    request.personalization_snapshot = payload.personalization_snapshot || null
+    await handleRoiAssistPayload(payload, trigger, request)
   } catch (error) {
-    console.warn('[ROI Assist] failed', error)
-    if (trigger === 'manual') {
+    if (isCurrentRoiAssistRequest(request)) {
+      console.warn('[ROI Assist] failed', error)
       setRoiAssistStatus(`ROI Assist failed: ${error?.message || 'unknown error'}`, { autoClearMs: 2600 })
-    } else {
-      setRoiAssistStatus('', { autoClearMs: 0 })
+      if (isPersonalizationPage.value) {
+        resetPersonalizationGuidance()
+        setPersonalizationNotice('needs_retry', `Identification did not finish (${error?.name === 'AbortError' ? 'cancelled or timed out' : error?.message || 'unknown error'}). Nothing was saved. Choose the image again.`)
+      }
     }
   } finally {
-    isRoiAssistRunning.value = false
-    resetRoiAssistAutoTimer()
+    if (request.signal && personalizationAbort?.signal === request.signal) personalizationAbort = null
+    if (request.sequence === roiAssistRequestSequence) {
+      isRoiAssistRunning.value = false
+      resetRoiAssistAutoTimer()
+    }
   }
 }
 
+const handlePersonalizationFrameUpload = async event => {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (file) await triggerRoiAssist('manual',file)
+}
+
 const maybeTriggerAutoRoiAssist = (video) => {
+  if (scannerSelectionMode.value === 'multi') return
   if (!isScanning.value || isRoiAssistRunning.value || !video) return
   if (scanResult.value || showMultiCodePicker.value || shouldSuspendLiveScanner.value) return
   if (Date.now() < roiAssistEligibleAt) return
@@ -2981,6 +4153,7 @@ const handleScannerWorkerMessage = (event) => {
 
   if (!isScanning.value) return
   if (payload.generation !== scannerWorkerGeneration) return
+  if (scannerSelectionMode.value === 'multi') return
 
   if (payload.metrics) {
     cachedFrameMetrics = payload.metrics
@@ -3200,17 +4373,22 @@ const getAdaptiveFrameMetrics = (video) => {
 onMounted(async () => {
   bindAudioPrimeListeners()
 
-  if (!isHandheldClient()) {
+  if (!isHandheldClient() && !isPersonalizationPage.value) {
     router.replace('/dashboard')
     return
   }
 
   initializeScannerWorker()
-  void checkPermissions()
+  if (isPersonalizationPage.value) {
+    statusMessage.value = 'Choose a scan image, or start the camera when ready.'
+    statusType.value = 'info'
+  } else {
+    void checkPermissions()
+  }
   if (isAdmin) {
     void ensureBinsLoaded()
   }
-  if (currentMode.value === 'camera') {
+  if (currentMode.value === 'camera' && !isPersonalizationPage.value) {
     void primeWarmCamera()
     await autoStartCamera()
   }
@@ -3218,6 +4396,10 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  scannerComponentActive = false
+  abortPersonalizationRequest()
+  candidateActionGeneration += 1
+  invalidateCurrentCandidateDecision()
   stopScanning({ forceRelease: true })
   disableScannerWorker()
 
@@ -3593,6 +4775,8 @@ const autoStartCamera = async () => {
 
 // 切换模式
 const switchMode = async (mode) => {
+  if (currentMode.value === mode) return
+  candidateActionGeneration += 1
   if (currentMode.value === 'camera') {
     await stopScanning()
   }
@@ -3715,6 +4899,11 @@ const startScanning = async () => {
 
 // 停止扫描
 const stopScanning = async ({ forceRelease = false } = {}) => {
+  candidateActionGeneration += 1
+  abortPersonalizationRequest()
+  invalidateCurrentCandidateDecision()
+  roiAssistRequestSequence += 1
+  isRoiAssistRunning.value = false
   isScanning.value = false
   isVideoFrameReady.value = false
   hideScanCapturePulse()
@@ -3764,6 +4953,7 @@ const stopScanning = async ({ forceRelease = false } = {}) => {
 
 // 切换摄像头
 const switchDevice = async () => {
+  candidateActionGeneration += 1
   if (selectedDevice.value) {
     localStorage.setItem(PREFERRED_CAMERA_DEVICE_KEY, selectedDevice.value)
   }
@@ -3970,18 +5160,25 @@ const handleManualSubmit = () => {
 
 // 处理扫描结果
 const handleScanResult = async (rawData, options = {}) => {
-  const { bypassCooldown = false, silent = false, captureLocation = null } = options
+  const {
+    bypassCooldown = false,
+    silent = false,
+    captureLocation = null,
+    captureLocations = []
+  } = options
   const normalizedRaw = String(rawData || '').trim()
 
   if (!normalizedRaw) return
+  if (scannerSelectionMode.value === 'multi' && options.sourceMode === 'camera') return
   if (isHandlingScan.value) return
   if (shouldSkipDuplicateScan(normalizedRaw, bypassCooldown)) return
 
   isHandlingScan.value = true
+  isFunctionalAcceptanceResult.value = Boolean(options.candidateDecisionId)
   lastProcessedScan.value = normalizedRaw
   lastProcessedAt.value = Date.now()
   if (!silent) {
-    showScanCapturePulse('Code captured', captureLocation)
+    showScanCapturePulse('Code captured', captureLocation, captureLocations)
   }
 
   try {
@@ -3997,7 +5194,12 @@ const handleScanResult = async (rawData, options = {}) => {
          'Content-Type': 'application/json',
          'Authorization': `Bearer ${localStorage.getItem('token')}`
       },
-      body: JSON.stringify({ raw: normalizedRaw, device: 'web-scanner' })
+      body: JSON.stringify({
+        raw: normalizedRaw,
+        device: options.candidateDecisionId
+          ? `functional_acceptance:${options.candidateDecisionId}`.slice(0, 100)
+          : 'web-scanner'
+      })
     })
 
     const responseText = await response.text()
@@ -4333,9 +5535,12 @@ const submitMove = async () => {
     }
 
     const movedLot = result.data?.moved_lot
-    const moveSummary = result.data?.split_created
+    // Prefill for the office-shop sale binding (admin page reads it; nothing is bound automatically).
+    try { localStorage.setItem('shop.lastMovedLot', JSON.stringify({ sku: movedLot?.sku, lot_number: movedLot?.lot_number, bin_code: movedLot?.bin_code, qty: movedLot?.qty, at: Date.now() })) } catch (_) { /* storage unavailable */ }
+    const moveSummary = (result.data?.split_created
       ? `A new split lot ${movedLot?.lot_number} was created in ${movedLot?.bin_code}.`
-      : `${moveForm.value.lot_number} was moved to ${movedLot?.bin_code || moveForm.value.to_bin_code}.`
+      : `${moveForm.value.lot_number} was moved to ${movedLot?.bin_code || moveForm.value.to_bin_code}.`) +
+      ' To sell it in the office shop, an admin can bind this lot in Shop admin → Sale stock.'
 
     statusMessage.value = 'Move completed successfully.'
     statusType.value = 'success'
@@ -4462,6 +5667,7 @@ const submitOutbound = async () => {
 
 const clearResult = () => {
   scanResult.value = null
+  isFunctionalAcceptanceResult.value = false
   scanAction.value = null
   showInboundModal.value = false
   showMoveModal.value = false
@@ -4524,6 +5730,23 @@ const playActionSuccessSound = () => {
 </script>
 
 <style scoped>
+.scanner-container.personalization-page { background:#f3f8fa; color:#163c46; border-radius:16px; }
+.personalization-page .multi-code-option { box-sizing:border-box; grid-template-columns:minmax(0,1fr); width:100%; }
+.personalization-page .multi-code-option > * { min-width:0; max-width:100%; grid-column:1; grid-row:auto; overflow-wrap:anywhere; box-sizing:border-box; }
+.personalization-page .multi-code-type,.personalization-page .multi-code-recommendation { width:fit-content; }
+.personalization-page .multi-code-primary { border-radius:10px; }
+.personalization-page .sr-only { display:none; }
+.personalization-page.camera-idle .camera-stage { height:180px; background:#173e48; }
+.personalization-context { max-width:960px; margin:0 auto 16px; padding:18px; background:#f0f8f7; color:#123f48; border-radius:14px; }
+.personalization-context p { margin:8px 0; line-height:1.45; }
+.personalization-context select { margin:8px; padding:8px; }
+.history-consent { display:flex; gap:8px; align-items:center; }
+.multi-code-position { font-size:12px; color:#3d6470; }
+.multi-code-purpose { margin:6px 0 10px; padding:8px 12px; background:#eef6f4; color:#1d5b52; border-radius:8px; font-size:13px; }
+.personalization-notice[data-status="needs_retry"], .personalization-notice[data-status="conflict"] { background:#fdecea; color:#8a2c22; padding:10px 12px; border-radius:8px; }
+.personalization-notice[data-status="saved"] { background:#e6f4ec; color:#1f6440; padding:10px 12px; border-radius:8px; }
+.confirmed-target { padding:12px; margin-top:12px; background:white; border:1px solid #90bdb5; border-radius:8px; }
+
 .scanner-container {
   max-width: 800px;
   margin: 0 auto;
@@ -4680,6 +5903,37 @@ const playActionSuccessSound = () => {
   filter: drop-shadow(0 0 10px rgba(134, 239, 172, 0.72));
 }
 
+.scan-code-target-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.scan-code-target {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid rgba(110, 231, 183, 0.92);
+  border-radius: 14px;
+  background: rgba(187, 247, 208, 0.2);
+  box-shadow:
+    0 0 0 1px rgba(236, 253, 245, 0.52),
+    0 0 26px rgba(52, 211, 153, 0.34),
+    inset 0 0 24px rgba(16, 185, 129, 0.12);
+  animation: scanCodeTargetReveal 1.16s cubic-bezier(0.2, 0.9, 0.22, 1) both;
+  overflow: hidden;
+}
+
+.scan-code-target-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background:
+    linear-gradient(135deg, rgba(236, 253, 245, 0.32), rgba(16, 185, 129, 0.16)),
+    radial-gradient(circle at 50% 50%, rgba(187, 247, 208, 0.24), rgba(187, 247, 208, 0.08) 70%);
+}
+
 .scan-code-lock {
   position: absolute;
   pointer-events: none;
@@ -4787,6 +6041,21 @@ const playActionSuccessSound = () => {
   }
 }
 
+@keyframes scanCodeTargetReveal {
+  0% {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  24% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 0.92;
+    transform: scale(1);
+  }
+}
+
 @keyframes scanFrameCaptured {
   0% {
     opacity: 0.82;
@@ -4880,6 +6149,79 @@ const playActionSuccessSound = () => {
   padding: 20px;
   background: #f9fafb;
   border-top: 1px solid #e5e7eb;
+}
+
+.candidate-mode-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.candidate-mode-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.candidate-mode-btn {
+  flex: 1;
+  min-height: 42px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #334155;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.candidate-mode-btn.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.candidate-mode-btn:disabled,
+.candidate-task-select select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.candidate-task-select {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.candidate-task-select select {
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.multi-capture-btn {
+  width: 100%;
+  min-height: 46px;
+  background: #1d4ed8;
+}
+
+.multi-capture-btn:disabled,
+.multi-code-select-btn:disabled,
+.multi-code-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.candidate-mode-hint {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .control-btn {
@@ -5336,6 +6678,39 @@ const playActionSuccessSound = () => {
   -webkit-backdrop-filter: blur(18px) saturate(125%);
 }
 
+.decision-save-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: min(92%, 640px);
+  margin: 10px auto 0;
+  padding: 9px 13px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.9);
+  color: #475569;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.decision-save-status[data-status="saved"] { color: #166534; }
+.decision-save-status[data-status="conflict"] { color: #b91c1c; }
+
+.decision-save-retry {
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: #e2e8f0;
+  color: #0f172a;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.decision-save-retry:disabled { opacity: 0.6; cursor: wait; }
+
 .roi-assist-btn {
   border-color: rgba(59, 130, 246, 0.24);
   background: linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(219, 234, 254, 0.88));
@@ -5434,6 +6809,11 @@ const playActionSuccessSound = () => {
     inset 0 1px 0 rgba(255, 255, 255, 0.78);
 }
 
+.multi-code-option.selected {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
 .multi-code-option:hover {
   border-color: rgba(59, 130, 246, 0.36);
   background: rgba(239, 246, 255, 0.86);
@@ -5510,6 +6890,33 @@ const playActionSuccessSound = () => {
   font-size: 0.76rem;
   font-weight: 800;
   line-height: 1.35;
+}
+
+.multi-code-select-btn {
+  grid-column: 2;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid #93c5fd;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.multi-code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.multi-code-empty {
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.85);
+  color: #475569;
 }
 
 .action-btn {

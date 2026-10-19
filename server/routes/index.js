@@ -14,6 +14,14 @@ const productionRoutes = require('./production')
 const barcodeRoutes = require('./barcode')
 const suggestionRoutes = require('./suggestions')
 const scannerAssistRoutes = require('./scannerAssist')
+const auth = require('../middlewares/auth')
+const requireRole = require('../middlewares/requireRole')
+const predictionRuntime = require('../services/predictionRuntime')
+const { createForecastService } = require('../services/skuForecast')
+const forecastService = createForecastService({ listOfficeItems: async () => {
+  const { Item } = require('../models')
+  return Item.findAll({ attributes:['sku','name'], order:[['sku','ASC']], limit:500, raw:true })
+}, officeHistory: (sku) => require('../services/shopInventory').officeHistory(sku) })
 
 // 注册路由
 router.use('/auth', authRoutes)
@@ -27,6 +35,11 @@ router.use('/production', productionRoutes)
 router.use('/barcode', barcodeRoutes)
 router.use('/suggestions', suggestionRoutes)
 router.use('/scanner', scannerAssistRoutes)
+router.use('/catalog', require('./catalog'))
+router.use('/shop/v2', require('./shopInventory'))
+router.use('/shop', require('./shopTab')())
+router.use('/candidate-recommendation', require('./candidateRecommendation')({ authenticate:auth, authorize:requireRole('admin','operator'), getJournal:predictionRuntime.getJournal, recognize:predictionRuntime.recognize, resolve:scannerAssistRoutes.resolveCandidateDisplay }))
+router.use('/sku-forecast', require('./skuForecast')({ authenticate:auth, authorize:requireRole('admin'), service:forecastService }))
 
 // 健康检查
 router.get('/health', async (req, res) => {

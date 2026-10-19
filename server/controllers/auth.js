@@ -63,9 +63,10 @@ const register = async (req, res) => {
     // 加密密码
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 首个注册用户自动成为管理员，后续用户为操作员
+    // 首个注册用户自动成为管理员；之后的公开注册一律为顾客（沿用既有枚举值 viewer，界面显示为 Customer）。
+    // 员工账号由管理员在用户管理页改为 operator。
     const userCount = await User.count();
-    const role = userCount === 0 ? 'admin' : 'operator';
+    const role = userCount === 0 ? 'admin' : 'viewer';
 
     // 创建用户
     const user = await User.create({
@@ -338,6 +339,34 @@ const listUsers = async (req, res) => {
   }
 };
 
+// 管理员在顾客(viewer)与操作员(operator)之间切换非管理员账号；不能修改管理员或自己
+const setUserRole = async (req, res) => {
+  try {
+    const targetUserId = Number(req.params.id);
+    const nextRole = req.body?.role;
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0 || !['operator', 'viewer'].includes(nextRole)) {
+      return res.status(400).json({ success: false, message: 'Invalid user or role' });
+    }
+    if (targetUserId === Number(req.user?.id)) {
+      return res.status(400).json({ success: false, message: 'You cannot change your own role' });
+    }
+    const targetUser = await User.findByPk(targetUserId, {
+      attributes: ['id', 'username', 'email', 'role', 'status', 'avatar', 'createdAt', 'updatedAt']
+    });
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+    if (targetUser.role === 'admin') {
+      return res.status(400).json({ success: false, message: 'Administrator roles are not changed here' });
+    }
+    await targetUser.update({ role: nextRole });
+    res.json({ success: true, message: 'Role updated; it takes effect at the next sign-in', data: { user: targetUser } });
+  } catch (error) {
+    console.error('修改用户角色失败:', error);
+    res.status(500).json({ success: false, message: '修改用户角色失败' });
+  }
+};
+
 // 管理员提升用户为管理员
 const promoteUserToAdmin = async (req, res) => {
   try {
@@ -389,6 +418,7 @@ const promoteUserToAdmin = async (req, res) => {
 };
 
 module.exports = {
+  setUserRole,
   register,
   login,
   forgotPassword,

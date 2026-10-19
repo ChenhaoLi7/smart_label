@@ -3,6 +3,7 @@ const {
   Bin,
   Lot,
   Transaction,
+  User,
   Inventory,
   PurchaseOrderLine,
   SalesOrderLine,
@@ -102,6 +103,13 @@ const getAvailableLotQuantity = (lots = []) => {
   }, 0)
 }
 
+const classifyInventoryTransaction = (transaction = {}) => {
+  const notes = typeof transaction.notes === 'string' ? transaction.notes : ''
+  if (notes.startsWith('Cycle Count Adjustment:')) return 'count'
+  if (notes.startsWith('BIN_TRANSFER:')) return 'move'
+  return transaction.transactionType === 'in' ? 'inbound' : 'outbound'
+}
+
 // 获取库存概览统计
 const getInventoryStats = async (req, res) => {
   try {
@@ -122,7 +130,12 @@ const getInventoryStats = async (req, res) => {
           required: false
         }]
       }),
-      Lot.count({ where: { status: 'ACTIVE' } }),
+      Lot.count({
+        where: {
+          status: 'ACTIVE',
+          qty: { [Op.gt]: 0 }
+        }
+      }),
       Bin.count({ where: { status: 'ACTIVE' } }),
       Lot.count({
         where: {
@@ -658,6 +671,221 @@ const getTransactions = async (req, res) => {
   }
 }
 
+// 获取 SKU 使用趋势和用户操作分析
+const getInventoryAnalytics = async (req, res) => {
+  try {
+    const allowedWindows = new Set([7, 30, 90])
+    const requestedDays = Number.parseInt(req.query.days, 10)
+    const days = allowedWindows.has(requestedDays) ? requestedDays : 30
+    const sku = String(req.query.sku || '').trim()
+    const operator = String(req.query.operator || '').trim()
+
+    if (sku.length > 100 || operator.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Analytics filters are too long.'
+      })
+    }
+
+    const now = new Date()
+    const startDate = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() - (days - 1)
+    ))
+    const whereClause = {
+      transactionTime: { [Op.gte]: startDate }
+    }
+
+    if (sku) whereClause.itemCode = sku
+    if (operator) {
+      whereClause[Op.and] = [
+        sequelize.where(
+          sequelize.fn('TRIM', sequelize.col('operator')),
+          operator
+        )
+      ]
+    }
+
+    const [transactionResult, itemRows, userRows, historicalOperators] = await Promise.all([
+      Transaction.findAndCountAll({
+        where: whereClause,
+        order: [['transactionTime', 'DESC']],
+        limit: 5000,
+        raw: true
+      }),
+      Item.findAll({
+        where: { status: 'ACTIVE' },
+        attributes: ['sku', 'name'],
+        order: [['sku', 'ASC']],
+        raw: true
+      }),
+      User.findAll({
+        where: { status: 'active' },
+        attributes: ['username', 'role'],
+        order: [['username', 'ASC']],
+        raw: true
+      }),
+      Transaction.findAll({
+        attributes: ['operator'],
+        group: ['operator'],
+        order: [['operator', 'ASC']],
+        raw: true
+      })
+    ])
+
+    const transactions = transactionResult.rows
+    const timelineMap = new Map()
+    const operatorMap = new Map()
+    const skuMap = new Map()
+    let inboundQty = 0
+    let outboundQty = 0
+    let countOperations = 0
+    let moveOperations = 0
+
+    for (let index = 0; index < days; index += 1) {
+      const date = new Date(startDate)
+      date.setUTCDate(startDate.getUTCDate() + index)
+      const key = date.toISOString().slice(0, 10)
+      timelineMap.set(key, {
+        date: key,
+        inbound: 0,
+        outbound: 0,
+        operations: 0,
+        adjustments: 0
+      })
+    }
+
+    transactions.forEach((transaction) => {
+      const operationType = classifyInventoryTransaction(transaction)
+      const quantity = Math.abs(Number(transaction.quantity || 0))
+      const timestamp = new Date(transaction.transactionTime)
+      const dayKey = Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString().slice(0, 10)
+      const operatorName = String(transaction.operator || 'System').trim() || 'System'
+      const itemCode = String(transaction.itemCode || 'Unknown SKU').trim() || 'Unknown SKU'
+
+      if (operationType === 'inbound') inboundQty += quantity
+      if (operationType === 'outbound') outboundQty += quantity
+      if (operationType === 'count') countOperations += 1
+      if (operationType === 'move') moveOperations += 1
+
+      const timelineEntry = dayKey ? timelineMap.get(dayKey) : null
+      if (timelineEntry) {
+        timelineEntry.operations += 1
+        if (operationType === 'inbound') timelineEntry.inbound += quantity
+        if (operationType === 'outbound') timelineEntry.outbound += quantity
+        if (operationType === 'count') timelineEntry.adjustments += 1
+      }
+
+      if (!operatorMap.has(operatorName)) {
+        operatorMap.set(operatorName, {
+          operator: operatorName,
+          operations: 0,
+          inboundQty: 0,
+          outboundQty: 0,
+          countOperations: 0,
+          moveOperations: 0,
+          lastActivity: transaction.transactionTime
+        })
+      }
+      const operatorEntry = operatorMap.get(operatorName)
+      operatorEntry.operations += 1
+      if (operationType === 'inbound') operatorEntry.inboundQty += quantity
+      if (operationType === 'outbound') operatorEntry.outboundQty += quantity
+      if (operationType === 'count') operatorEntry.countOperations += 1
+      if (operationType === 'move') operatorEntry.moveOperations += 1
+
+      if (!skuMap.has(itemCode)) {
+        skuMap.set(itemCode, {
+          sku: itemCode,
+          name: transaction.itemName || itemCode,
+          operations: 0,
+          inboundQty: 0,
+          outboundQty: 0,
+          lastActivity: transaction.transactionTime
+        })
+      }
+      const skuEntry = skuMap.get(itemCode)
+      skuEntry.operations += 1
+      if (operationType === 'inbound') skuEntry.inboundQty += quantity
+      if (operationType === 'outbound') skuEntry.outboundQty += quantity
+    })
+
+    const operatorOptionsMap = new Map()
+    const itemNameMap = new Map(itemRows.map((item) => [item.sku, item.name || item.sku]))
+    userRows.forEach((user) => {
+      operatorOptionsMap.set(user.username, {
+        username: user.username,
+        role: user.role
+      })
+    })
+    historicalOperators.forEach((row) => {
+      const username = String(row.operator || '').trim()
+      if (username && !operatorOptionsMap.has(username)) {
+        operatorOptionsMap.set(username, { username, role: null })
+      }
+    })
+
+    const recent = transactions.slice(0, 12).map((transaction) => ({
+      id: transaction.id,
+      operationType: classifyInventoryTransaction(transaction),
+      itemCode: transaction.itemCode,
+      itemName: itemNameMap.get(transaction.itemCode) || transaction.itemName,
+      quantity: Math.abs(Number(transaction.quantity || 0)),
+      beforeQuantity: transaction.beforeQuantity,
+      afterQuantity: transaction.afterQuantity,
+      operator: String(transaction.operator || 'System').trim() || 'System',
+      location: transaction.location || null,
+      transactionTime: transaction.transactionTime
+    }))
+
+    return res.json({
+      success: true,
+      data: {
+        filters: {
+          days,
+          sku: sku || null,
+          operator: operator || null,
+          periodStart: startDate.toISOString(),
+          periodEnd: now.toISOString()
+        },
+        options: {
+          skus: itemRows,
+          operators: Array.from(operatorOptionsMap.values())
+            .sort((left, right) => left.username.localeCompare(right.username))
+        },
+        summary: {
+          operations: transactionResult.count,
+          inboundQty,
+          outboundQty,
+          netMovement: inboundQty - outboundQty,
+          countOperations,
+          moveOperations,
+          activeOperators: operatorMap.size,
+          truncated: transactionResult.count > transactions.length
+        },
+        timeline: Array.from(timelineMap.values()),
+        operatorBreakdown: Array.from(operatorMap.values())
+          .sort((left, right) => right.operations - left.operations),
+        skuBreakdown: Array.from(skuMap.values())
+          .map((entry) => ({
+            ...entry,
+            name: itemNameMap.get(entry.sku) || entry.name
+          }))
+          .sort((left, right) => right.outboundQty - left.outboundQty),
+        recent
+      }
+    })
+  } catch (error) {
+    console.error('获取库存分析失败:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to load inventory analytics.',
+      error: error.message
+    })
+  }
+}
+
 // 导出库存数据
 const exportInventoryData = async (req, res) => {
   try {
@@ -811,47 +1039,48 @@ const adjustInventory = async (req, res) => {
 }
 
 const updateLot = async (req, res) => {
+  const transaction = await require('../config/database').transaction()
   try {
     const lotNumber = String(req.params.lotNumber || '').trim()
-    const { expiry_date } = req.body
+    const body = req.body || {}
+    const has = (k) => Object.prototype.hasOwnProperty.call(body, k)
 
     if (!lotNumber) {
-      return res.status(400).json({
-        success: false,
-        message: 'Lot number is required'
-      })
+      await transaction.rollback()
+      return res.status(400).json({ success: false, message: 'Lot number is required' })
+    }
+    if (!has('expiry_date') && !has('quality_status')) {
+      await transaction.rollback()
+      return res.status(400).json({ success: false, message: 'Nothing to update (expiry_date or quality_status)' })
     }
 
-    const lot = await Lot.findOne({
-      where: { lot_number: lotNumber },
-      include: [
-        { model: Item, as: 'item' },
-        { model: Bin, as: 'bin', attributes: ['id', 'bin_code', 'zone'] }
-      ]
-    })
-
+    const lot = await Lot.findOne({ where: { lot_number: lotNumber }, transaction, lock: true })
     if (!lot) {
-      return res.status(404).json({
-        success: false,
-        message: 'Lot not found'
-      })
+      await transaction.rollback()
+      return res.status(404).json({ success: false, message: 'Lot not found' })
     }
 
-    const normalizedExpiry = expiry_date === '' || expiry_date === null || expiry_date === undefined
-      ? null
-      : new Date(expiry_date)
-
-    if (normalizedExpiry && Number.isNaN(normalizedExpiry.getTime())) {
-      return res.status(400).json({
-        success: false,
-        message: 'Expiry date is invalid'
-      })
+    const patch = { updated_by: req.user?.username || 'system', version: (lot.version || 0) + 1 }
+    // Only fields present in the request change; an explicit '' or null expiry still clears it as before.
+    if (has('expiry_date')) {
+      const expiry = body.expiry_date
+      const normalizedExpiry = expiry === '' || expiry === null || expiry === undefined ? null : new Date(expiry)
+      if (normalizedExpiry && Number.isNaN(normalizedExpiry.getTime())) {
+        await transaction.rollback()
+        return res.status(400).json({ success: false, message: 'Expiry date is invalid' })
+      }
+      patch.expiry_date = normalizedExpiry
+    }
+    if (has('quality_status')) {
+      if (!['PENDING', 'PASSED', 'FAILED', 'QUARANTINE'].includes(body.quality_status)) {
+        await transaction.rollback()
+        return res.status(400).json({ success: false, message: 'quality_status must be PENDING, PASSED, FAILED or QUARANTINE' })
+      }
+      patch.quality_status = body.quality_status
     }
 
-    await lot.update({
-      expiry_date: normalizedExpiry,
-      updated_by: req.user?.username || 'system'
-    })
+    await lot.update(patch, { transaction })
+    await transaction.commit()
 
     const refreshedLot = await Lot.findOne({
       where: { lot_number: lotNumber },
@@ -869,6 +1098,7 @@ const updateLot = async (req, res) => {
       }
     })
   } catch (error) {
+    try { await transaction.rollback() } catch (_) { /* already finished */ }
     console.error('更新批次失败:', error)
     return res.status(500).json({
       success: false,
@@ -886,6 +1116,7 @@ module.exports = {
   getLots,
   getBins,
   getTransactions,
+  getInventoryAnalytics,
   exportInventoryData,
   adjustInventory,
   updateLot

@@ -42,6 +42,9 @@
           <button @click="refreshData" class="btn btn-glass">
             <span>Refresh</span>
           </button>
+          <button @click="openAnalytics" class="btn btn-glass">
+            <span>Analytics</span>
+          </button>
           <button @click="exportData" class="btn btn-glass">
             <span>Export</span>
           </button>
@@ -65,26 +68,6 @@
           <strong class="metric-value">{{ card.value }}</strong>
           <span class="metric-label">{{ card.label }}</span>
           <p class="metric-note">{{ card.note }}</p>
-        </article>
-
-        <article class="signal-card glass-panel">
-          <div class="signal-header">
-            <div>
-              <p class="eyebrow">Attention Layer</p>
-              <h2>What this inventory is telling you</h2>
-            </div>
-            <span class="signal-chip">{{ activeRowCount }} visible rows</span>
-          </div>
-
-          <div class="signal-list">
-            <div v-for="signal in quickSignals" :key="signal.label" class="signal-row">
-              <div class="signal-copy">
-                <strong>{{ signal.label }}</strong>
-                <p>{{ signal.note }}</p>
-              </div>
-              <span class="signal-value" :class="signal.tone">{{ signal.value }}</span>
-            </div>
-          </div>
         </article>
       </section>
 
@@ -357,6 +340,7 @@
         </div>
         <div class="mobile-hero-actions">
           <button @click="refreshData" class="mobile-chip">Refresh</button>
+          <button @click="openAnalytics" class="mobile-chip">Analytics</button>
           <button @click="exportData" class="mobile-chip">Export</button>
         </div>
       </section>
@@ -735,7 +719,7 @@
         <div class="modal-header">
           <div>
             <p class="eyebrow">Lot Editor</p>
-            <h3>Edit Expiry Date</h3>
+            <h3>Edit Lot</h3>
           </div>
           <button @click="closeEditLotModal" class="close-btn">&times;</button>
         </div>
@@ -770,6 +754,16 @@
               <span>Expiry Date</span>
               <input v-model="editLotForm.expiry_date" type="date" class="field-input">
               <small class="field-footnote">Leave blank if this batch has no expiry date.</small>
+            </label>
+            <label class="edit-field edit-field-full">
+              <span>Quality</span>
+              <select v-model="editLotForm.quality_status" class="field-input">
+                <option value="PENDING">Pending check</option>
+                <option value="PASSED">Passed (can be bound for sale)</option>
+                <option value="FAILED">Failed</option>
+                <option value="QUARANTINE">Quarantine</option>
+              </select>
+              <small class="field-footnote">Only lots marked Passed can be used for the office shop.</small>
             </label>
           </div>
 
@@ -806,6 +800,10 @@ const onItemCreated = () => {
 
 const goBack = () => {
   router.push('/dashboard')
+}
+
+const openAnalytics = () => {
+  router.push('/inventory-analytics')
 }
 
 const activeTab = ref('items')
@@ -845,7 +843,8 @@ const editLotForm = ref({
   qty: 0,
   uom: 'pcs',
   bin: '',
-  expiry_date: ''
+  expiry_date: '',
+  quality_status: 'PENDING'
 })
 const countForm = ref({
   lot_number: '',
@@ -1050,13 +1049,6 @@ const filteredTransactions = computed(() => {
   return filtered
 })
 
-const activeRowCount = computed(() => {
-  if (activeTab.value === 'items') return filteredItems.value.length
-  if (activeTab.value === 'lots') return filteredLots.value.length
-  if (activeTab.value === 'bins') return filteredBins.value.length
-  return filteredTransactions.value.length
-})
-
 const formattedToday = computed(() => {
   return new Intl.DateTimeFormat('en-US', {
     month: 'long',
@@ -1108,29 +1100,6 @@ const statCards = computed(() => [
     note: stats.value.lowStock > 0 ? 'Needs replenishment review' : 'No urgent shortage right now',
     badge: stats.value.lowStock > 0 ? 'Watchlist' : 'Healthy',
     tone: stats.value.lowStock > 0 ? 'tone-rose' : 'tone-mint'
-  }
-])
-
-const quickSignals = computed(() => [
-  {
-    label: 'Stock Health',
-    note: stats.value.lowStock > 0
-      ? 'Some SKUs are below target and should be replenished soon.'
-      : 'Low-stock watchlist is clear at the moment.',
-    value: `${stats.value.lowStock} flagged`,
-    tone: stats.value.lowStock > 0 ? 'danger' : 'ok'
-  },
-  {
-    label: 'Current Lens',
-    note: activeTabMeta.value.description,
-    value: activeTabMeta.value.label,
-    tone: 'neutral'
-  },
-  {
-    label: 'Data Density',
-    note: 'Visible rows after current filters and sorting are applied.',
-    value: `${activeRowCount.value} rows`,
-    tone: 'neutral'
   }
 ])
 
@@ -1427,7 +1396,8 @@ const loadData = async () => {
         ...lot,
         lot: lot.lot_number,
         bin: lot.bin?.bin_code || 'N/A',
-        exp: lot.expiry_date
+        exp: lot.expiry_date,
+        quality_status: lot.quality_status
       }))
     } else if (activeTab.value === 'bins') {
       bins.value = result.data.bins || []
@@ -1561,7 +1531,8 @@ const openEditLotModal = (lot) => {
     qty: Number(lot.qty || 0),
     uom: lot.uom || 'pcs',
     bin: lot.bin || '—',
-    expiry_date: formatDateForInput(lot.exp || lot.expiry_date)
+    expiry_date: formatDateForInput(lot.exp || lot.expiry_date),
+    quality_status: lot.quality_status || 'PENDING'
   }
   showEditLotModal.value = true
 }
@@ -1683,7 +1654,8 @@ const saveLotEdits = async () => {
       method: 'PUT',
       headers: getAuthHeaders(),
       body: JSON.stringify({
-        expiry_date: editLotForm.value.expiry_date || null
+        expiry_date: editLotForm.value.expiry_date || null,
+        quality_status: editLotForm.value.quality_status
       })
     })
 
@@ -1695,7 +1667,7 @@ const saveLotEdits = async () => {
 
     closeEditLotModal()
     await refreshData()
-    showFeedback(`${lotNumber} expiry date updated`, 'success')
+    showFeedback(`${lotNumber} updated`, 'success')
   } catch (error) {
     console.error('Failed to update lot:', error)
     showFeedback(error.message || 'Failed to update lot', 'error')
@@ -1959,8 +1931,6 @@ const formatItemMeta = (item) => {
 .hero-pills,
 .hero-actions,
 .metric-topline,
-.signal-header,
-.signal-row,
 .workspace-header,
 .workspace-tools,
 .tab-bar,
@@ -2042,12 +2012,12 @@ const formatItemMeta = (item) => {
 .overview-grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 18px;
+  gap: 14px;
 }
 
 .metric-card {
   grid-column: span 3;
-  padding: 24px;
+  padding: 16px 18px;
   position: relative;
   overflow: hidden;
 }
@@ -2074,22 +2044,21 @@ const formatItemMeta = (item) => {
 }
 
 .metric-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 16px;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
   display: grid;
   place-items: center;
   background: rgba(255, 255, 255, 0.62);
-  font-size: 20px;
+  font-size: 16px;
 }
 
-.metric-badge,
-.signal-chip {
-  padding: 6px 10px;
+.metric-badge {
+  padding: 4px 8px;
   border-radius: 999px;
   background: rgba(15, 23, 42, 0.05);
   color: var(--muted-strong);
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2097,79 +2066,25 @@ const formatItemMeta = (item) => {
 
 .metric-value {
   display: block;
-  margin-top: 18px;
-  font-size: 40px;
+  margin-top: 10px;
+  font-size: 30px;
   line-height: 1;
   letter-spacing: -0.06em;
 }
 
 .metric-label {
   display: block;
-  margin-top: 8px;
-  font-size: 15px;
+  margin-top: 5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .metric-note {
-  margin: 10px 0 0;
-  color: var(--muted-strong);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.signal-card {
-  grid-column: span 12;
-  padding: 24px;
-}
-
-.signal-header {
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.signal-header h2 {
-  margin: 0;
-  font-size: 22px;
-  letter-spacing: -0.03em;
-}
-
-.signal-list {
-  display: grid;
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.signal-row {
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 16px 18px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid rgba(15, 23, 42, 0.05);
-}
-
-.signal-copy strong {
-  display: block;
-  font-size: 15px;
-}
-
-.signal-copy p {
   margin: 6px 0 0;
-  font-size: 13px;
   color: var(--muted-strong);
+  font-size: 11.5px;
+  line-height: 1.4;
 }
-
-.signal-value {
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.signal-value.ok { color: var(--accent-mint); }
-.signal-value.danger { color: var(--accent-rose); }
-.signal-value.neutral { color: var(--accent-blue); }
 
 .workspace-panel {
   padding: 24px;

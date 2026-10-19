@@ -78,7 +78,7 @@
 <script>
 import { ref } from 'vue'
 import axios from 'axios'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import SunCalc from 'suncalc'
 
 export default {
@@ -89,6 +89,7 @@ export default {
     const error = ref('')
     const loading = ref(false)
     const router = useRouter()
+    const route = useRoute()
     const isDark = ref(true)
 
     // Theme Logic
@@ -161,7 +162,9 @@ export default {
         localStorage.setItem('userRole', res.data.data.user.role || 'operator')
         localStorage.setItem('userAvatar', res.data.data.user.avatar || '')
         
-        const nextPath = '/dashboard'
+        // 顾客（viewer）只进商店；员工默认进仪表盘，从商店来的登录则回到商店
+        const signedRole = res.data.data.user.role
+        const nextPath = signedRole === 'viewer' || route.query.redirect === '/shop' ? '/shop' : '/dashboard'
 
         // 延迟跳转以展示动画
         setTimeout(() => {

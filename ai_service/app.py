@@ -2,6 +2,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from PIL import Image, UnidentifiedImageError
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor, IsolationForest
@@ -9,16 +10,16 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
 import joblib
 import json
 import os
 import sys
 import time
 import tempfile
+import hashlib
+import io
+import threading
+import uuid
 from pathlib import Path
 from typing import List, Dict, Any
 import warnings
@@ -32,6 +33,11 @@ if OBB_PIPELINE_DIR.exists() and str(OBB_PIPELINE_DIR) not in sys.path:
 ROI_MODEL_PATH = Path(os.getenv("ROI_OBB_MODEL_PATH", OBB_PIPELINE_DIR / "models" / "best_obb.pt"))
 ROI_ASSIST_MAX_UPLOAD_BYTES = int(os.getenv("ROI_ASSIST_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
 ROI_ASSIST_KEEP_UPLOADS = os.getenv("ROI_ASSIST_KEEP_UPLOADS", "0") == "1"
+ROI_ASSIST_MAX_IMAGE_PIXELS = int(os.getenv("ROI_ASSIST_MAX_IMAGE_PIXELS", str(20_000_000)))
+_ROI_ASSIST_LOCK = threading.Lock()
+
+from qr_recovery import get_service as get_qr_recovery_service
+from candidate_position import associate_candidate_positions
 
 app = FastAPI(title="智能仓库AI服务", version="1.0.0")
 
@@ -56,6 +62,8 @@ def _is_roi_model_cached() -> bool:
 @app.on_event("startup")
 async def preload_roi_assist_model():
     """Load the OBB model once so the first ROI Assist request is not cold."""
+    recovery_status = get_qr_recovery_service().initialize()
+    print(f"[qr-recovery] startup status: {json.dumps(recovery_status, ensure_ascii=False)}")
     if not ROI_MODEL_PATH.exists() or not OBB_PIPELINE_DIR.exists():
         return
 
@@ -65,6 +73,15 @@ async def preload_roi_assist_model():
         get_obb_model(str(ROI_MODEL_PATH))
     except Exception as error:
         print(f"[roi-assist] OBB model preload skipped: {error}")
+
+
+@app.on_event("shutdown")
+def close_qr_recovery_worker():
+    """Reap the isolated QR inference and decoder workers on graceful shutdown."""
+    try:
+        get_qr_recovery_service().close()
+    except Exception as error:
+        print(f"[qr-recovery] worker shutdown cleanup failed: {error}")
 
 
 # 数据模型
@@ -262,6 +279,13 @@ def _build_roi_arbitration(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def create_lstm_model(input_shape):
     """创建LSTM模型"""
+    try:
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.layers import LSTM, Dense, Dropout
+        from tensorflow.keras.optimizers import Adam
+    except Exception as error:
+        raise RuntimeError("TensorFlow runtime is unavailable") from error
+
     model = Sequential([
         LSTM(50, return_sequences=True, input_shape=input_shape),
         Dropout(0.2),
@@ -301,7 +325,15 @@ async def predict_demand(req: DemandRequest):
             raise HTTPException(status_code=400, detail="数据不足以训练模型")
         
         # 创建并训练LSTM模型
-        model = create_lstm_model((look_back, 1))
+        try:
+            model = create_lstm_model((look_back, 1))
+        except RuntimeError as error:
+            if str(error) == "TensorFlow runtime is unavailable":
+                raise HTTPException(
+                    status_code=503,
+                    detail="Demand prediction is unavailable because its optional TensorFlow runtime could not be loaded."
+                ) from error
+            raise
         model.fit(X, y, epochs=100, batch_size=32, verbose=0)
         
         # 预测未来需求
@@ -328,8 +360,21 @@ async def predict_demand(req: DemandRequest):
             model_type="LSTM"
         )
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"预测失败: {str(e)}")
+
+@app.get("/predict/demand/health")
+async def demand_prediction_health():
+    """Report the optional TensorFlow capability independently of process health."""
+    tensorflow_status = _check_import("tensorflow")
+    return {
+        "service": "demand-prediction",
+        "available": tensorflow_status["available"],
+        "status": "available" if tensorflow_status["available"] else "unavailable",
+        "error": None if tensorflow_status["available"] else "TensorFlow runtime could not be loaded"
+    }
 
 @app.post("/detect/anomaly", response_model=AnomalyResponse)
 async def detect_anomaly(req: AnomalyRequest):
@@ -463,46 +508,84 @@ async def cluster_items(data: List[Dict[str, Any]]):
         raise HTTPException(status_code=500, detail=f"聚类分析失败: {str(e)}")
 
 @app.get("/scanner/roi-assist/health")
-async def scanner_roi_assist_health():
+def scanner_roi_assist_health():
     """ROI Assist health check for barcode OBB fallback."""
-    return _pipeline_health()
+    return {**_pipeline_health(), "qr_recovery": get_qr_recovery_service().health()}
 
 @app.post("/scanner/roi-assist")
-async def scanner_roi_assist(
+def scanner_roi_assist(
     frame: UploadFile = File(...),
     mode: str = Form("obb"),
     trigger: str = Form("manual"),
     operation_context: str = Form(""),
     scan_frame: str = Form("")
 ):
-    """Decode one uploaded scanner frame using server-side ROI assist.
-
-    The endpoint first tries server-side whole-image decoding as a cheap fallback.
-    If that fails and mode=obb, it tries the YOLO-OBB rotated ROI pipeline.
-    """
+    """Decode one frame and recover only failed QR OBB candidates on demand."""
+    request_id = str(uuid.uuid4())
     started_at = time.perf_counter()
     normalized_mode = _safe_mode(mode)
     normalized_trigger = _safe_trigger(trigger)
     normalized_scan_frame = _parse_scan_frame(scan_frame)
-
-    if not OBB_PIPELINE_DIR.exists():
-        raise HTTPException(status_code=503, detail="barcode_obb_pipeline directory is missing")
-
-    payload = await frame.read()
-    if not payload:
-        raise HTTPException(status_code=400, detail="Uploaded frame is empty")
-    if len(payload) > ROI_ASSIST_MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Uploaded frame is too large")
-
-    suffix = Path(frame.filename or "frame.jpg").suffix.lower()
-    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
-        suffix = ".jpg"
-
-    temp_dir = OBB_PIPELINE_DIR / "data" / "results" / "roi_assist_uploads"
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    recovery_service = get_qr_recovery_service()
+    timings = {}
+    payload = b""
+    payload_sha256 = None
+    image_width = image_height = None
     temp_path = None
 
+    if not _ROI_ASSIST_LOCK.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail={"request_id": request_id, "message": "Scanner is busy; retry shortly."},
+            headers={"Retry-After": "1"},
+        )
+
     try:
+        if not OBB_PIPELINE_DIR.exists():
+            raise HTTPException(status_code=503, detail="barcode_obb_pipeline directory is missing")
+
+        read_started = time.perf_counter()
+        payload = frame.file.read(ROI_ASSIST_MAX_UPLOAD_BYTES + 1)
+        timings["upload_read_ms"] = round((time.perf_counter() - read_started) * 1000, 3)
+        if not payload:
+            raise HTTPException(status_code=400, detail="Uploaded frame is empty")
+        if len(payload) > ROI_ASSIST_MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Uploaded frame is too large")
+        payload_sha256 = hashlib.sha256(payload).hexdigest()
+
+        validation_started = time.perf_counter()
+        supported_signatures = (
+            payload.startswith(b"\xff\xd8\xff"),
+            payload.startswith(b"\x89PNG\r\n\x1a\n"),
+            len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP",
+            payload.startswith(b"BM"),
+        )
+        if not any(supported_signatures):
+            raise HTTPException(status_code=400, detail="Uploaded frame is not a supported image")
+        try:
+            with Image.open(io.BytesIO(payload)) as uploaded_image:
+                image_width, image_height = uploaded_image.size
+                if image_width < 1 or image_height < 1:
+                    raise HTTPException(status_code=400, detail="Uploaded image has invalid dimensions")
+                if image_width * image_height > ROI_ASSIST_MAX_IMAGE_PIXELS:
+                    raise HTTPException(status_code=413, detail="Uploaded image exceeds the pixel limit")
+                if uploaded_image.format not in {"JPEG", "PNG", "WEBP", "BMP"}:
+                    raise HTTPException(status_code=415, detail="Unsupported scanner image format")
+                uploaded_image.verify()
+        except HTTPException:
+            raise
+        except Exception as error:
+            # Pillow may probe optional formats while identifying arbitrary bytes.
+            # A missing optional plugin (or malformed payload) must remain a
+            # client input error instead of surfacing as a server failure.
+            raise HTTPException(status_code=400, detail="Uploaded image is invalid or unsupported") from error
+        timings["image_validation_ms"] = round((time.perf_counter() - validation_started) * 1000, 3)
+
+        suffix = Path(frame.filename or "frame.jpg").suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+            suffix = ".jpg"
+        temp_dir = OBB_PIPELINE_DIR / "data" / "results" / "roi_assist_uploads"
+        temp_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             suffix=suffix,
             prefix=f"{normalized_trigger}_",
@@ -515,16 +598,29 @@ async def scanner_roi_assist(
         from src.baseline_decode import decode_whole_image
         from src.proposed_obb_decode import decode_with_obb_candidates
 
+        baseline_started = time.perf_counter()
         baseline_result = _normalize_pipeline_result(
             decode_whole_image(str(temp_path)),
             method="server_whole_image",
         )
+        timings["whole_image_decode_ms"] = round((time.perf_counter() - baseline_started) * 1000, 3)
         baseline_candidates = _build_baseline_candidates(baseline_result)
         proposed_result = None
         proposed_candidates = []
-        selected_result = baseline_result
+        recovery_diagnostic = {
+            "enabled": bool(recovery_service.cfg.get("enabled")),
+            "ready": recovery_service.health().get("ready", False),
+            "attempted": False,
+            "model_executed": False,
+            "recovered_count": 0,
+            "candidates": [],
+            "status": "skipped",
+            "reason": "mode_is_baseline",
+            "scope": "online_engineering",
+        }
 
         if normalized_mode == "obb":
+            obb_started = time.perf_counter()
             proposed_result = _normalize_pipeline_result(
                 decode_with_obb_candidates(
                     str(temp_path),
@@ -533,10 +629,38 @@ async def scanner_roi_assist(
                 ),
                 method="yolo_obb_roi",
             )
+            timings["obb_detection_and_decode_ms"] = round((time.perf_counter() - obb_started) * 1000, 3)
             proposed_candidates = proposed_result.get("candidates") or []
-            selected_result = proposed_result if proposed_result["success"] else baseline_result
+            import cv2
 
-        all_candidates = _merge_roi_candidates(baseline_candidates, proposed_candidates)
+            frame_array = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame_array is not None and frame_array.size:
+                recovery_started = time.perf_counter()
+                proposed_result, recovery_diagnostic = recovery_service.recover(
+                    frame_array,
+                    {**proposed_result, "candidates": proposed_candidates},
+                    request_id=request_id,
+                    frame_sha256=payload_sha256,
+                )
+                timings["qr_recovery_ms"] = round((time.perf_counter() - recovery_started) * 1000, 3)
+                proposed_candidates = proposed_result.get("candidates") or []
+            else:
+                recovery_diagnostic.update(status="skipped", reason="server_image_decode_failed")
+                timings["qr_recovery_ms"] = 0.0
+
+        merge_started = time.perf_counter()
+
+        # Positions are attached by text + location instead of being dropped by text-only dedupe.
+        from src.proposed_obb_decode import _center_distance_ratio
+        all_candidates, position_report = associate_candidate_positions(
+            baseline_result,
+            baseline_candidates,
+            proposed_candidates,
+            image_width=image_width,
+            image_height=image_height,
+            target_frame=normalized_scan_frame,
+            center_distance_ratio=_center_distance_ratio,
+        )
         arbitration = _build_roi_arbitration(all_candidates)
         best_candidate = all_candidates[0] if all_candidates else None
         selected_texts = [candidate.get("decoded_text") for candidate in all_candidates if candidate.get("success") and candidate.get("decoded_text")]
@@ -546,7 +670,30 @@ async def scanner_roi_assist(
                 if decoded_type and decoded_type not in selected_types:
                     selected_types.append(decoded_type)
 
+        timings["candidate_merge_ms"] = round((time.perf_counter() - merge_started) * 1000, 3)
+        selected_result = proposed_result if proposed_result and proposed_result["success"] else baseline_result
+        server_outer_ms = round((time.perf_counter() - started_at) * 1000, 3)
+        timings["server_outer_ms"] = server_outer_ms
+
+        recovery_service.log({
+            "request_id": request_id,
+            "frame_sha256": payload_sha256,
+            "frame_bytes": len(payload),
+            "frame_width": image_width,
+            "frame_height": image_height,
+            "mode": normalized_mode,
+            "trigger": normalized_trigger,
+            "timings_ms": timings,
+            "response_success": bool(selected_result["success"] or selected_texts),
+            "returned_text_sha256": [
+                hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+                for text in selected_texts if text
+            ],
+            "recovery_status": recovery_diagnostic.get("status"),
+        })
+
         return {
+            "request_id": request_id,
             "success": bool(selected_result["success"] or selected_texts),
             "trigger": normalized_trigger,
             "mode": normalized_mode,
@@ -555,19 +702,44 @@ async def scanner_roi_assist(
             "method": selected_result["method"],
             "decoded_texts": selected_texts or selected_result["decoded_texts"],
             "decoded_types": selected_types or selected_result["decoded_types"],
-            "processing_time_ms": round((time.perf_counter() - started_at) * 1000, 2),
+            "processing_time_ms": server_outer_ms,
+            "timings_ms": timings,
+            "recovery": recovery_diagnostic,
             "model_ready": ROI_MODEL_PATH.exists(),
             "model_path": str(ROI_MODEL_PATH),
             "error": selected_result.get("error"),
             "candidates": all_candidates,
             "best_candidate": best_candidate,
             "arbitration": arbitration,
+            "position_association": position_report,
             "baseline": baseline_result,
             "proposed": proposed_result,
         }
-    except HTTPException:
+    except HTTPException as error:
+        recovery_service.log({
+            "request_id": request_id,
+            "frame_sha256": payload_sha256,
+            "frame_bytes": len(payload),
+            "frame_width": image_width,
+            "frame_height": image_height,
+            "mode": normalized_mode,
+            "http_status": error.status_code,
+            "error": str(error.detail),
+            "timings_ms": {**timings, "server_outer_ms": round((time.perf_counter() - started_at) * 1000, 3)},
+        })
         raise
     except Exception as error:
+        recovery_service.log({
+            "request_id": request_id,
+            "frame_sha256": payload_sha256,
+            "frame_bytes": len(payload),
+            "frame_width": image_width,
+            "frame_height": image_height,
+            "mode": normalized_mode,
+            "http_status": 500,
+            "error": str(error),
+            "timings_ms": {**timings, "server_outer_ms": round((time.perf_counter() - started_at) * 1000, 3)},
+        })
         raise HTTPException(status_code=500, detail=f"ROI Assist failed: {error}")
     finally:
         if temp_path and temp_path.exists() and not ROI_ASSIST_KEEP_UPLOADS:
@@ -575,6 +747,7 @@ async def scanner_roi_assist(
                 temp_path.unlink()
             except Exception:
                 pass
+        _ROI_ASSIST_LOCK.release()
 
 @app.get("/health")
 async def health_check():
