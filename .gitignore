@@ -49,3 +49,7 @@ backup.sql
 
 # Artifacts
 /Users/lichenhao/.gemini/antigravity/brain/
+
+# Candidate recommendation history (real user choices; never commit)
+server/data/candidate-history/
+server/data/shop-tab/

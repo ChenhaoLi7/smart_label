@@ -78,9 +78,24 @@ def decode_image_with_pyzbar(image) -> dict:
         decoded = decode(image)
         texts = [_decode_bytes(item.data) for item in decoded]
         types = [str(getattr(item, "type", "UNKNOWN")) for item in decoded]
-        return _result(success=bool(texts), decoded_texts=texts, decoded_types=types, engine="pyzbar")
+        result = _result(success=bool(texts), decoded_texts=texts, decoded_types=types, engine="pyzbar")
+        # Per-symbol text, type and location as reported by zbar, in decoder-input pixels.
+        result["symbols"] = [_pyzbar_symbol(item) for item in decoded]
+        return result
     except Exception as error:
         return _result(success=False, engine="pyzbar", error=str(error))
+
+
+def _pyzbar_symbol(item) -> dict:
+    polygon = [[float(point.x), float(point.y)] for point in (getattr(item, "polygon", None) or [])]
+    rect = getattr(item, "rect", None)
+    return {
+        "text": _decode_bytes(item.data),
+        "type": str(getattr(item, "type", "UNKNOWN")),
+        "polygon": polygon,
+        "rect": [float(rect.left), float(rect.top), float(rect.width), float(rect.height)] if rect is not None else None,
+        "coordinates": "decoder_input_pixels",
+    }
 
 
 def decode_image_with_opencv(image) -> dict:
@@ -92,16 +107,22 @@ def decode_image_with_opencv(image) -> dict:
     texts: list[str] = []
     types: list[str] = []
     errors: list[str] = []
+    symbols: list[dict] = []
 
     try:
         qr_detector = cv2.QRCodeDetector()
         if hasattr(qr_detector, "detectAndDecodeMulti"):
-            ok, decoded_info, _points, _straight = qr_detector.detectAndDecodeMulti(image)
+            ok, decoded_info, multi_points, _straight = qr_detector.detectAndDecodeMulti(image)
             if ok:
-                for text in decoded_info:
+                for index, text in enumerate(decoded_info):
                     if text:
                         texts.append(str(text))
                         types.append("QR_CODE")
+                        try:
+                            corners = [[float(x), float(y)] for x, y in multi_points[index].reshape(-1, 2)]
+                        except Exception:
+                            corners = []
+                        symbols.append({"text": str(text), "type": "QR_CODE", "polygon": corners, "rect": None, "coordinates": "decoder_input_pixels"})
         text, _points, _straight = qr_detector.detectAndDecode(image)
         if text:
             texts.append(str(text))
@@ -132,13 +153,15 @@ def decode_image_with_opencv(image) -> dict:
     except Exception as error:
         errors.append(f"barcode: {error}")
 
-    return _result(
+    result = _result(
         success=bool(texts),
         decoded_texts=texts,
         decoded_types=types,
         engine="opencv",
         error="; ".join(errors) if errors and not texts else None,
     )
+    result["symbols"] = symbols
+    return result
 
 
 def decode_image_combined(image) -> dict:

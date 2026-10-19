@@ -8,6 +8,7 @@ const {
   getLots,
   getBins,
   getTransactions,
+  getInventoryAnalytics,
   exportInventoryData,
   adjustInventory,
   createItem,
@@ -42,6 +43,9 @@ router.get('/bins', getBins)
 
 // 获取交易记录
 router.get('/transactions', getTransactions)
+
+// 获取 SKU 使用趋势和用户操作分析
+router.get('/analytics', getInventoryAnalytics)
 
 // 导出库存数据
 router.get('/export', exportInventoryData)

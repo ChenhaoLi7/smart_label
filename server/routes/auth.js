@@ -16,6 +16,7 @@ router.get('/profile', authMiddleware, authCtrl.getUserInfo);
 router.get('/users', authMiddleware, requireRole('admin'), authCtrl.listUsers);
 // PATCH /api/auth/users/:id/promote
 router.patch('/users/:id/promote', authMiddleware, requireRole('admin'), authCtrl.promoteUserToAdmin);
+router.patch('/users/:id/role', authMiddleware, requireRole('admin'), authCtrl.setUserRole);
 // POST /api/auth/upload-avatar
 router.post('/upload-avatar', authMiddleware, authCtrl.upload.single('avatar'), authCtrl.uploadAvatar);
 

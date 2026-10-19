@@ -20,6 +20,8 @@ def decode_whole_image(image_path: str) -> dict:
             "processing_time_ms": now_ms() - start_ms,
             "error": error,
             "engine_details": decoded.get("details", {}),
+            "image_width": int(image.shape[1]),
+            "image_height": int(image.shape[0]),
         }
     except Exception as error:
         return {
